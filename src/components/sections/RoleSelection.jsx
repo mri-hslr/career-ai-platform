@@ -1,27 +1,29 @@
 import { motion } from 'framer-motion';
 import { GraduationCap, Briefcase, Users, ArrowRight } from 'lucide-react';
+// 1. Import the useNavigate hook from React Router
+import { useNavigate } from 'react-router-dom';
 
 const roles = [
   {
     id: 'student',
-    title: 'Student',
-    description: 'Discover your strengths, explore industries, and map out a step-by-step trajectory to your dream career.',
+    title: 'STUDENT', // Updated to uppercase to match your screenshot
+    description: 'DISCOVER YOUR STRENGTHS, EXPLORE INDUSTRIES, AND MAP OUT A STEP-BY-STEP TRAJECTORY TO YOUR DREAM CAREER.', // Updated to match screenshot style
     icon: GraduationCap,
     color: 'from-blue-400 to-sky-300',
     shadow: 'hover:shadow-blue-500/20'
   },
   {
     id: 'mentor',
-    title: 'Mentor',
-    description: 'Share your industry expertise, guide the next generation, and give back to the professional community.',
+    title: 'MENTOR',
+    description: 'SHARE YOUR INDUSTRY EXPERTISE, GUIDE THE NEXT GENERATION, AND GIVE BACK TO THE PROFESSIONAL COMMUNITY.',
     icon: Briefcase,
     color: 'from-green-400 to-emerald-300',
     shadow: 'hover:shadow-green-500/20'
   },
   {
     id: 'parent',
-    title: 'Parent',
-    description: 'Track your child\'s progress, understand their natural aptitudes, and support them with data-driven insights.',
+    title: 'PARENT',
+    description: 'TRACK YOUR CHILD\'S PROGRESS, UNDERSTAND THEIR NATURAL APTITUDES, AND SUPPORT THEM WITH DATA-DRIVEN INSIGHTS.',
     icon: Users,
     color: 'from-purple-400 to-fuchsia-300',
     shadow: 'hover:shadow-purple-500/20'
@@ -29,6 +31,9 @@ const roles = [
 ];
 
 export default function RoleSelection() {
+  // 2. Initialize the navigate function
+  const navigate = useNavigate();
+
   return (
     <section className="relative w-full py-32 px-6 lg:px-12 z-10">
       <div className="max-w-7xl mx-auto">
@@ -42,7 +47,7 @@ export default function RoleSelection() {
             transition={{ duration: 0.6 }}
             className="text-4xl md:text-5xl font-extrabold text-slate-900 tracking-tight mb-4"
           >
-            Choose Your <span className="text-transparent bg-clip-text bg-gradient-to-r from-blue-500 to-sky-400">Path</span>
+            CHOOSE YOUR <span className="text-transparent bg-clip-text bg-gradient-to-r from-blue-500 to-sky-400">PATH</span>
           </motion.h2>
           <motion.p 
             initial={{ opacity: 0, y: 20 }}
@@ -51,7 +56,7 @@ export default function RoleSelection() {
             transition={{ duration: 0.6, delay: 0.1 }}
             className="text-lg text-slate-600 max-w-2xl mx-auto"
           >
-            Our AI adapts to exactly what you need. Select how you want to sign in to get a tailored platform experience.
+            OUR AI ADAPTS TO EXACTLY WHAT YOU NEED. SELECT HOW YOU WANT TO SIGN IN TO GET A TAILORED PLATFORM EXPERIENCE.
           </motion.p>
         </div>
 
@@ -62,6 +67,8 @@ export default function RoleSelection() {
             return (
               <motion.div
                 key={role.id}
+                // 3. Add the onClick handler here so the whole card is clickable
+                onClick={() => navigate('/signin')}
                 initial={{ opacity: 0, y: 30 }}
                 whileInView={{ opacity: 1, y: 0 }}
                 viewport={{ once: true, margin: "-50px" }}
@@ -85,7 +92,7 @@ export default function RoleSelection() {
 
                 {/* CTA Link */}
                 <div className="flex items-center text-slate-800 font-bold group-hover:text-blue-500 transition-colors mt-auto">
-                  Continue as {role.title} 
+                  CONTINUE AS {role.title} 
                   <ArrowRight size={18} className="ml-2 transform group-hover:translate-x-2 transition-transform" />
                 </div>
               </motion.div>

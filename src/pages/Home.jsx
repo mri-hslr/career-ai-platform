@@ -1,38 +1,44 @@
 import React from 'react';
-import Hero from '../components/sections/Hero';
-import AppShowcase from '../components/sections/AppShowcase';
+import CloudBackground from '../components/layout/CloudBackground';
+import Hero from '../components/sections/Hero'; 
+import AppShowcase from '../components/sections/AppShowcase'; 
 import RoleSelection from '../components/sections/RoleSelection';
 import Features from '../components/sections/Features';
-import CTA from '../components/sections/CTA';
 import Footer from '../components/layout/Footer';
 
 export default function Home() {
   return (
-    <div className="relative min-h-screen font-sans antialiased overflow-x-hidden text-slate-900">
+    <div className="relative min-h-screen bg-[#f0f9ff] overflow-x-hidden text-slate-900">
       
-      {/* ========================================================= */}
-      {/* LEVEL 1: GLOBAL BACKGROUND (Soft Sky, Fixed to viewport)  */}
-      {/* ========================================================= */}
-      <div 
-        className="fixed inset-0 z-0 pointer-events-none bg-gradient-to-b from-[#87CEEB] via-[#B0E0E6] to-[#F0F8FF]"
-        style={{ 
-          backgroundImage: "url('https://api.vcodinator.com/storage/v1/object/public/vovy_assets/skybgmain.png')",
-          backgroundSize: 'cover',
-          backgroundPosition: 'center',
-          backgroundRepeat: 'no-repeat'
-        }}
-      />
+      {/* FIXED CLOUD BACKGROUND */}
+      <div className="fixed inset-0 z-0 pointer-events-none">
+        <CloudBackground />
+      </div>
 
-      {/* MAIN CONTENT LAYER */}
-      <main className="relative z-10 flex flex-col min-h-screen">
-        <Hero />
+      {/* SCROLLING CONTENT */}
+      <div className="relative z-10 flex flex-col w-full">
+        
+        {/* HERO SECTION */}
+        <section className="min-h-screen flex flex-col justify-center pt-20 pb-0">
+          <Hero />
+        </section>
+
+        {/* INTERACTIVE TOGGLE SHOWCASE */}
         <AppShowcase />
-        <RoleSelection />
-        <Features />
-        <CTA />
-        <Footer />
-      </main>
 
+        {/* REST OF YOUR PAGE CONTENT */}
+        {/* THE FIX: Added -mt-16 (mobile) and lg:-mt-48 (desktop) to yank this whole section UP and eat the gap! */}
+        <section className="relative z-20 w-full max-w-7xl mx-auto px-6 -mt-16 lg:-mt-48 pb-20 flex flex-col gap-12 lg:gap-24">
+          <RoleSelection />
+          <Features />
+        </section>
+        
+        {/* FOOTER */}
+        <div className="relative z-20 w-full">
+          <Footer />
+        </div>
+
+      </div>
     </div>
   );
 }

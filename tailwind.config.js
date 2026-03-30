@@ -6,22 +6,10 @@ export default {
   ],
   theme: {
     extend: {
-      colors: {
-        background: '#f4f9ff', 
-        surface: '#ffffff',
-        primary: '#0ea5e9', // Vovy-style bright blue
-        accent: '#f43f5e',
-        textMain: '#1e293b' // Dark slate for readable text
+      fontFamily: {
+        // Sets Comico as the primary sans font for Tailwind
+        sans: ['"Comico"', 'system-ui', 'sans-serif'], 
       },
-      animation: {
-        'float': 'float 6s ease-in-out infinite',
-      },
-      keyframes: {
-        float: {
-          '0%, 100%': { transform: 'translateY(0)' },
-          '50%': { transform: 'translateY(-20px)' },
-        }
-      }
     },
   },
   plugins: [],

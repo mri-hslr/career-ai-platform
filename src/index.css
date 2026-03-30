@@ -1,8 +1,40 @@
+/* src/index.css */
+
+/* 1. Load the Comico font from your public folder */
+@font-face {
+  font-family: 'Comico';
+  /* Make sure this perfectly matches the name of the file you downloaded! */
+  src: url('/fonts/Comico-Regular.woff2') format('woff2'); 
+  font-weight: normal;
+  font-style: normal;
+  font-display: swap;
+}
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
+@layer base {
+  html {
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    scroll-behavior: smooth;
+  }
+  
+  body {
+    @apply bg-slate-50 text-slate-900;
+    /* 2. Force Comico as the global default font */
+    font-family: 'Comico', system-ui, sans-serif; 
+  }
+
+  /* Optional: Adjust heading line-heights since marker fonts can be tall */
+  h1, h2, h3, h4, h5, h6 {
+    line-height: 1.1 !important;
+  }
+}
+
 @layer utilities {
+  /* 3. Your Global Cloud Float Animations */
   @keyframes float {
     0% { transform: translateY(0px); }
     50% { transform: translateY(-25px); }
