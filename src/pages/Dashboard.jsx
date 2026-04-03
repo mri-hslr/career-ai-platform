@@ -307,8 +307,9 @@ export default function Dashboard() {
         <div>
           <div className="h-20 flex items-center px-8 border-b border-slate-100 mb-6 cursor-pointer group">
             <div className="w-8 h-8 bg-gradient-to-br from-blue-500 to-sky-400 rounded-lg flex items-center justify-center shadow-md mr-3 group-hover:shadow-blue-500/30 group-hover:scale-105 transition-all">
-              <span className="text-white text-sm">🤖</span>
+              <span className="text-white text-sm"></span>
             </div>
+            <TrendingUp className="text-white w-4 h-4" strokeWidth={2.5} />
             <span className="text-xl font-extrabold tracking-tight text-slate-800">Harmony</span>
           </div>
           <nav className="px-4 space-y-1">
