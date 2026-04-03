@@ -15,8 +15,8 @@ export function getCurrentUser() {
   if (!payload) return null;
   return {
     userId: payload.user_id,
-    email: payload.sub,
-    role: payload.role || 'student',
+    email:  payload.sub,
+    role:   payload.role || 'student',
   };
 }
 
@@ -31,21 +31,42 @@ export function getUserDisplayName() {
   const user = getCurrentUser();
   if (!user) return 'there';
 
-  // Only students may use harmony_profile_name — and only if it belongs to
-  // the currently-logged-in user (keyed by userId to prevent cross-user leak).
+  // Priority 1: real full_name stored from the server response — used by ALL roles.
+  // This key is written by the dashboard after a successful profile fetch,
+  // so it always matches what the backend sends as `sender` in WS broadcasts.
+  const storedFullName = localStorage.getItem(`harmony_full_name_${user.userId}`);
+  if (storedFullName) return storedFullName;
+
+  // Priority 2 (students only): profile name stored at onboarding.
   if (user.role === 'student') {
-    const storedId = localStorage.getItem('harmony_profile_owner');
+    const storedId   = localStorage.getItem('harmony_profile_owner');
     const storedName = localStorage.getItem('harmony_profile_name');
     if (storedName && storedId === user.userId) return storedName;
   }
 
-  // Mentors/parents/admins: never touch harmony_profile_name.
-  // Use a role-specific key if it exists, else format the email.
+  // Priority 3: legacy mentor name key (kept for backwards compat).
   if (user.role === 'mentor') {
-    return localStorage.getItem('harmony_mentor_name') || emailToFirstName(user.email);
+    const legacyName = localStorage.getItem('harmony_mentor_name');
+    if (legacyName) return legacyName;
   }
 
+  // Fallback: derive a first name from the email.
   return emailToFirstName(user.email);
+}
+
+/**
+ * Call this after any successful profile fetch from the server.
+ * Stores the canonical full_name so getUserDisplayName() matches
+ * what the backend sends as `sender` in WebSocket broadcasts.
+ *
+ * Usage:
+ *   import { setUserFullName } from '../utils/jwt';
+ *   setUserFullName(profile.full_name);  // after getMentorProfile() / getStudentProfile()
+ */
+export function setUserFullName(fullName) {
+  const user = getCurrentUser();
+  if (!user || !fullName) return;
+  localStorage.setItem(`harmony_full_name_${user.userId}`, fullName);
 }
 
 /**

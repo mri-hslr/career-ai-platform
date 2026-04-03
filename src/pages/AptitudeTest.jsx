@@ -194,10 +194,26 @@ export default function AptitudeTest() {
         }
 
         const localGrade = localStorage.getItem('harmony_student_grade');
-        const numericGrade = localGrade?.toString().match(/\d+/) ? localGrade.toString().match(/\d+/)[0] : '8';
-        setTargetGrade(numericGrade);
+        
+        // 1. Extract the raw number (e.g., "7th" -> 7), default to 8
+        const extractedNum = localGrade?.toString().match(/\d+/) 
+          ? parseInt(localGrade.toString().match(/\d+/)[0], 10) 
+          : 8;
 
-        const pool = await getAptitudePool(numericGrade);
+        // 2. Map to your database ranges
+        let mappedGrade = '6-8'; // Default fallback
+        if (extractedNum >= 6 && extractedNum <= 8) {
+          mappedGrade = '6-8';
+        } else if (extractedNum >= 9 && extractedNum <= 11) {
+          mappedGrade = '9-11';
+        } else if (extractedNum >= 12) {
+          mappedGrade = '12'; // Catches 12th and College (if college has numbers like 1, 2, 3, you might need to adjust this)
+        }
+
+        // 3. Set the target grade exactly as the backend expects it
+        setTargetGrade(mappedGrade);
+
+        const pool = await getAptitudePool(mappedGrade);
         const questions = pool?.questions || pool || [];
         setMasterPool(questions);
 

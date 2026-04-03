@@ -6,7 +6,7 @@ import {
   ShieldCheck, Clock, CheckCircle2, X, Briefcase 
 } from 'lucide-react';
 import { mentorshipApi } from '../services/api/mentorshipApi';
-import { toast } from 'react-toastify';
+import { toast } from 'react-hot-toast';
 
 const DAYS = ['', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
 

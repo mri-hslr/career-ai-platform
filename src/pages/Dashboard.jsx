@@ -1,9 +1,11 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import { toISTTime, toISTDate } from '../utils/time';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   LayoutDashboard, Map, Video, Settings, LogOut,
   Bell, User, Brain, Zap, Sparkles, ChevronRight, CheckCircle2,
-  Lock, ArrowRight, Target, Users, UserCheck, Loader2, TrendingUp
+  Lock, ArrowRight, Target, Users, UserCheck, Loader2, TrendingUp,
+  CalendarClock, X, Wifi, WifiOff, Radio
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 
@@ -17,6 +19,7 @@ import { apiClient } from '../services/api/apiClient';
 import confetti from 'canvas-confetti';
 import { toast } from 'react-hot-toast';
 import { SplitText, BlurText, ShinyOverlay } from '../components/ui/Animations';
+import SessionChat from '../components/SessionChat';
 
 // ============================================================================
 // HELPER HOOKS & COMPONENTS
@@ -184,6 +187,173 @@ function ActiveRoadmap() {
 }
 
 // ============================================================================
+// SESSIONS PANEL COMPONENTS
+// ============================================================================
+
+function formatCountdown(secs) {
+  if (secs <= 0) return null;
+  const h = Math.floor(secs / 3600);
+  const m = Math.floor((secs % 3600) / 60);
+  const s = secs % 60;
+  if (h > 0) return `${h}h ${String(m).padStart(2, '0')}m`;
+  if (m > 0) return `${m}m ${String(s).padStart(2, '0')}s`;
+  return `${s}s`;
+}
+
+// Backend WS room unlocks at 2.5 minutes (150s) before start
+const WS_UNLOCK_SECONDS = 150;
+
+function SessionBadge({ session, onJoin }) {
+  const [secondsLeft, setSecondsLeft] = useState(
+    Math.max(0, session.seconds_until_start)
+  );
+  // Only show Join when WS room is actually open (within 2.5 min of start)
+  const isLive = secondsLeft <= WS_UNLOCK_SECONDS;
+
+  useEffect(() => {
+    if (session.is_live || session.seconds_until_start <= 0) return;
+    const id = setInterval(() => {
+      setSecondsLeft(prev => {
+        if (prev <= 1) { clearInterval(id); return 0; }
+        return prev - 1;
+      });
+    }, 1000);
+    return () => clearInterval(id);
+  }, [session.is_live, session.seconds_until_start]);
+
+  const scheduledTime = toISTTime(session.scheduled_at);
+  const scheduledDate = toISTDate(session.scheduled_at);
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 8 }}
+      animate={{ opacity: 1, y: 0 }}
+      className={`relative flex items-center gap-4 px-4 py-3.5 rounded-2xl border transition-all ${
+        isLive
+          ? 'bg-emerald-50 border-emerald-200'
+          : 'bg-white border-slate-100'
+      }`}
+    >
+      {isLive && (
+        <span className="absolute top-2.5 right-3 flex items-center gap-1">
+          <Radio size={10} className="text-emerald-500 animate-pulse" />
+          <span className="text-[9px] font-black text-emerald-600 uppercase tracking-widest">Live</span>
+        </span>
+      )}
+
+      {/* Avatar */}
+      <div className={`w-10 h-10 rounded-xl flex items-center justify-center font-bold text-sm text-white shrink-0 ${
+        isLive ? 'bg-emerald-500' : 'bg-slate-700'
+      }`}>
+        {session.other_party_name?.split(' ').map(w => w[0]).slice(0, 2).join('').toUpperCase()}
+      </div>
+
+      {/* Info */}
+      <div className="flex-1 min-w-0">
+        <p className="font-bold text-slate-800 text-sm truncate leading-tight">{session.other_party_name}</p>
+        <p className="text-xs text-slate-400 mt-0.5">{scheduledDate} · {scheduledTime}</p>
+        {!isLive && secondsLeft > 0 && (
+          <div className="flex items-center gap-1.5 mt-1">
+            <div className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse" />
+            <span className="text-xs font-bold text-amber-600">Starts in {formatCountdown(secondsLeft)}</span>
+          </div>
+        )}
+      </div>
+
+      {/* Join button (only when live) */}
+      {isLive && (
+        <motion.button
+          whileTap={{ scale: 0.93 }}
+          onClick={() => onJoin(session)}
+          className="px-4 py-2 bg-emerald-500 text-white text-xs font-black rounded-xl shadow-sm hover:bg-emerald-600 transition-colors shrink-0"
+        >
+          Join
+        </motion.button>
+      )}
+    </motion.div>
+  );
+}
+
+function SessionsPanel({ onClose, onJoin }) {
+  const [sessions, setSessions] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    apiClient.get('/api/v1/sessions/upcoming')
+      .then(data => setSessions(Array.isArray(data) ? data : []))
+      .catch(() => toast.error('Failed to load sessions.'))
+      .finally(() => setLoading(false));
+  }, []);
+
+  return (
+    <motion.div
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      className="fixed inset-0 z-40 bg-black/30 backdrop-blur-sm"
+      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
+    >
+      <motion.div
+        initial={{ x: '100%' }}
+        animate={{ x: 0 }}
+        exit={{ x: '100%' }}
+        transition={{ type: 'spring', stiffness: 350, damping: 30 }}
+        className="absolute right-0 top-0 h-full w-full max-w-sm bg-slate-50 shadow-2xl flex flex-col"
+        onClick={e => e.stopPropagation()}
+      >
+        {/* Header */}
+        <div className="bg-white border-b border-slate-100 px-6 py-5 flex items-center justify-between shrink-0">
+          <div className="flex items-center gap-3">
+            <div className="w-9 h-9 bg-blue-50 rounded-xl flex items-center justify-center">
+              <CalendarClock size={18} className="text-blue-600" />
+            </div>
+            <div>
+              <h2 className="font-extrabold text-slate-800 text-sm">Upcoming Sessions</h2>
+              <p className="text-xs text-slate-400">Your scheduled mentor calls</p>
+            </div>
+          </div>
+          <button
+            onClick={onClose}
+            className="p-2 rounded-xl text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-all"
+          >
+            <X size={18} />
+          </button>
+        </div>
+
+        {/* Content */}
+        <div className="flex-1 overflow-y-auto px-5 py-4 space-y-3">
+          {loading ? (
+            <div className="flex flex-col items-center justify-center h-40 gap-3">
+              <Loader2 size={24} className="animate-spin text-blue-400" />
+              <span className="text-sm text-slate-400">Loading sessions...</span>
+            </div>
+          ) : sessions.length === 0 ? (
+            <div className="flex flex-col items-center justify-center h-40 gap-3 text-center">
+              <CalendarClock size={32} className="text-slate-300" />
+              <p className="text-sm text-slate-400 font-medium">No upcoming sessions scheduled.</p>
+            </div>
+          ) : (
+            sessions.map(session => (
+              <SessionBadge
+                key={session.session_id}
+                session={session}
+                onJoin={onJoin}
+              />
+            ))
+          )}
+        </div>
+
+        <div className="px-5 py-4 border-t border-slate-100 bg-white shrink-0">
+          <p className="text-[10px] text-slate-400 text-center font-medium">
+            Session room unlocks 2.5 minutes before start
+          </p>
+        </div>
+      </motion.div>
+    </motion.div>
+  );
+}
+
+// ============================================================================
 // MAIN DASHBOARD COMPONENT
 // ============================================================================
 
@@ -191,12 +361,14 @@ export default function Dashboard() {
   const navigate = useNavigate();
   const name = getUserDisplayName();
 
-  const { progress, loading, refetch } = useUserProgress();
+  const { progress, loading } = useUserProgress();
 
   const [inviteCode, setInviteCode] = useState(null);
   const [selectedCareer, setSelectedCareer] = useState(null);
   const [recommendedMentors, setRecommendedMentors] = useState([]);
   const [loadingMentors, setLoadingMentors] = useState(false);
+  const [showSessionsPanel, setShowSessionsPanel] = useState(false);
+  const [activeChat, setActiveChat] = useState(null); // { session_id, other_party_name }
 
   // Fetch Selected Career
   useEffect(() => {
@@ -307,7 +479,7 @@ export default function Dashboard() {
         <div>
           <div className="h-20 flex items-center px-8 border-b border-slate-100 mb-6 cursor-pointer group">
             <div className="w-8 h-8 bg-gradient-to-br from-blue-500 to-sky-400 rounded-lg flex items-center justify-center shadow-md mr-3 group-hover:shadow-blue-500/30 group-hover:scale-105 transition-all">
-              <span className="text-white text-sm"></span>
+              <TrendingUp className="text-white w-4 h-4" strokeWidth={2.5} />
             </div>
             <TrendingUp className="text-white w-4 h-4" strokeWidth={2.5} />
             <span className="text-xl font-extrabold tracking-tight text-slate-800">Harmony</span>
@@ -320,6 +492,7 @@ export default function Dashboard() {
             <NavItem icon={Sparkles} label="Career Matches" onClick={() => navigate('/career-recommendations')} />
             <NavItem icon={Map} label="My Roadmap" onClick={() => navigate('/roadmap')} />
             <NavItem icon={Video} label="Mentorship" />
+            <NavItem icon={CalendarClock} label="Sessions" onClick={() => setShowSessionsPanel(true)} />
             <NavItem icon={Settings} label="Settings" />
           </nav>
         </div>
@@ -565,6 +738,30 @@ export default function Dashboard() {
           </motion.div>
         )}
       </main>
+
+      {/* Sessions Drawer */}
+      <AnimatePresence>
+        {showSessionsPanel && (
+          <SessionsPanel
+            onClose={() => setShowSessionsPanel(false)}
+            onJoin={(session) => {
+              setShowSessionsPanel(false);
+              setActiveChat({ session_id: session.session_id, other_party_name: session.other_party_name });
+            }}
+          />
+        )}
+      </AnimatePresence>
+
+      {/* Chat Modal */}
+      <AnimatePresence>
+        {activeChat && (
+          <SessionChat
+            sessionId={activeChat.session_id}
+            otherPartyName={activeChat.other_party_name}
+            onClose={() => setActiveChat(null)}
+          />
+        )}
+      </AnimatePresence>
     </div>
   );
 }

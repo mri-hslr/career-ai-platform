@@ -6,7 +6,7 @@ import { toast } from 'react-hot-toast';
 
 import { apiClient } from '../services/api/apiClient';
 import { getModuleQuestions, submitAssessment } from '../services/api/assessmentApi';
-import { getCurrentUser } from '../utils/jwt'; // FIXED: Changed getUserId to getCurrentUser
+import { getCurrentUser } from '../utils/jwt';
 
 // ─── Result Screen ────────────────────────────────────────────────────────────
 
@@ -76,7 +76,7 @@ function PersonalityResultScreen({ personalityData }) {
                 <h2 className="font-extrabold text-slate-800 mb-4 text-lg">Score Breakdown</h2>
                 <div className="space-y-4">
                   {Object.entries(rawScores).map(([trait, score], i) => {
-                    const max = 35;
+                    const max = 35; // Adjust max score per trait based on your backend logic
                     const pct = Math.min(Math.round((score / max) * 100), 100);
                     return (
                       <div key={trait}>
@@ -143,12 +143,12 @@ function OptionButton({ text, selected, onClick }) {
 
 export default function PersonalityTest() {
   const navigate = useNavigate();
-  const user = getCurrentUser(); // FIXED: Using user object
+  const user = getCurrentUser();
   const userId = user?.userId;
 
   const [status, setStatus] = useState('loading'); 
   const [personalityData, setPersonalityData] = useState(null);
-  const [questions, setQuestions] = useState([]);
+  const [questions, setQuestions] = useState([]); // ALWAYS an array
   const [answers, setAnswers] = useState({});
   const [currentIndex, setCurrentIndex] = useState(0);
   const [submitting, setSubmitting] = useState(false);
@@ -161,14 +161,42 @@ export default function PersonalityTest() {
         if (me.progress?.personality_done) {
           setPersonalityData(me.personality_data ?? {});
           setStatus('completed');
-          // Ensure local storage is in sync
           localStorage.setItem('harmony_personality_done', 'true');
           return;
         }
 
-        const data = await getModuleQuestions('personality');
-        setQuestions(data?.questions ?? data ?? []);
+        // 1. Fetch data
+        const response = await getModuleQuestions('personality');
+        const rawData = response?.data?.questions || response?.questions || response || {};
+
+        // 2. Bulletproof Normalizer: Force data into an Array regardless of backend shape
+        let parsedArray = [];
+        if (Array.isArray(rawData)) {
+          parsedArray = rawData;
+        } else if (typeof rawData === 'object' && rawData !== null) {
+          parsedArray = Object.entries(rawData).map(([key, val]) => ({
+            id: key,
+            ...val
+          }));
+        }
+
+        // 3. Inject standard 5-point Likert options if not provided by backend
+        const finalQuestions = parsedArray.map(q => ({
+          id: q.id,
+          text: q.text || q.question_text || q.question || "Unknown Question",
+          trait: q.trait || q.category || "General",
+          options: q.options || [
+            { label: 'Strongly Agree', value: 5 },
+            { label: 'Agree', value: 4 },
+            { label: 'Neutral', value: 3 },
+            { label: 'Disagree', value: 2 },
+            { label: 'Strongly Disagree', value: 1 }
+          ]
+        }));
+
+        setQuestions(finalQuestions);
         setStatus('testing');
+        
       } catch (err) {
         console.error('PersonalityTest init error:', err);
         toast.error('Failed to load test. Please try again.');
@@ -179,18 +207,19 @@ export default function PersonalityTest() {
     init();
   }, []);
 
-  const currentQuestion = questions[currentIndex];
-  const totalQuestions = questions.length;
+  // Safe fallback to prevent crashes if questions is somehow not an array
+  const safeQuestions = Array.isArray(questions) ? questions : [];
+  const currentQuestion = safeQuestions[currentIndex];
+  const totalQuestions = safeQuestions.length;
   const progress = totalQuestions > 0 ? Math.round(((currentIndex + 1) / totalQuestions) * 100) : 0;
   const allAnswered = totalQuestions > 0 && Object.keys(answers).length === totalQuestions;
 
   const handleAnswer = (questionId, optionValue) => {
     setAnswers(prev => ({ ...prev, [questionId]: optionValue }));
-  };
-
-  const handleNext = () => {
+    
+    // Auto-advance feature
     if (currentIndex < totalQuestions - 1) {
-      setCurrentIndex(i => i + 1);
+      setTimeout(() => setCurrentIndex(i => i + 1), 300);
     }
   };
 
@@ -200,18 +229,43 @@ export default function PersonalityTest() {
     }
   };
 
+  const computeContradictions = () => {
+    const traitScores = {};
+    safeQuestions.forEach(q => {
+      const trait = q.trait;
+      const qId = q.id;
+      const score = answers[qId]; // Already numeric (1-5) because of injected options
+      
+      if (!trait || score === undefined) return;
+      if (!traitScores[trait]) traitScores[trait] = [];
+      traitScores[trait].push(score);
+    });
+
+    const contradictions = {};
+    Object.entries(traitScores).forEach(([trait, scores]) => {
+      if (scores.length >= 2) {
+        const spread = Math.max(...scores) - Math.min(...scores);
+        // If a user answers '5' (Strongly Agree) and '1' (Strongly Disagree) in the same trait
+        if (spread >= 3) contradictions[trait] = true;
+      }
+    });
+    return contradictions;
+  };
+
   const handleSubmit = async () => {
     if (!allAnswered) {
       toast.error('Please answer all questions before submitting.');
       return;
     }
 
+    const contradictions = computeContradictions();
+
     setSubmitting(true);
     try {
       await submitAssessment({
         userId,
         moduleKey: 'personality',
-        payload: { answers },
+        payload: { answers, contradictions },
       });
       
       localStorage.setItem('harmony_personality_done', 'true');
@@ -243,7 +297,7 @@ export default function PersonalityTest() {
     return <PersonalityResultScreen personalityData={personalityData} />;
   }
 
-  if (questions.length === 0) {
+  if (totalQuestions === 0) {
     return (
       <div className="min-h-screen bg-slate-50 flex items-center justify-center font-sans">
         <div className="text-center">
@@ -297,14 +351,18 @@ export default function PersonalityTest() {
                   </div>
                   <span className="text-xs font-bold text-violet-600 uppercase tracking-wider">Personality</span>
                 </div>
+                
                 <h2 className="text-xl font-extrabold text-slate-900 mb-8 leading-relaxed">
-                  {currentQuestion?.question_text ?? currentQuestion?.text ?? currentQuestion?.question ?? ''}
+                  {currentQuestion?.text}
                 </h2>
+                
                 <div className="space-y-3">
                   {(currentQuestion?.options ?? []).map((opt, i) => {
-                    const optValue = typeof opt === 'string' ? opt : opt.value ?? opt.text ?? opt.label;
-                    const optLabel = typeof opt === 'string' ? opt : opt.text ?? opt.label ?? opt.value;
-                    const qId = currentQuestion?.id ?? currentIndex;
+                    // Extract safe values regardless of input structure
+                    const optValue = opt.value ?? opt.label ?? opt;
+                    const optLabel = opt.label ?? opt.text ?? opt;
+                    const qId = currentQuestion.id;
+                    
                     return (
                       <OptionButton
                         key={i}
@@ -329,8 +387,8 @@ export default function PersonalityTest() {
 
                 {currentIndex < totalQuestions - 1 ? (
                   <button
-                    onClick={handleNext}
-                    disabled={!answers[currentQuestion?.id ?? currentIndex]}
+                    onClick={() => setCurrentIndex(i => i + 1)}
+                    disabled={answers[currentQuestion.id] === undefined}
                     className="flex items-center gap-2 px-6 py-2.5 bg-violet-600 text-white font-extrabold rounded-2xl disabled:opacity-40 hover:bg-violet-700 transition-colors"
                   >
                     Next →
@@ -350,17 +408,16 @@ export default function PersonalityTest() {
         </div>
       </div>
 
-      {/* Answer dots */}
+      {/* Answer dots (Safe iteration over safeQuestions) */}
       <div className="bg-white border-t border-slate-100 p-4 flex justify-center gap-1.5 flex-wrap">
-        {questions.map((q, i) => {
-          const qId = q?.id ?? i;
+        {safeQuestions.map((q, i) => {
           return (
             <button
-              key={i}
+              key={q.id}
               onClick={() => setCurrentIndex(i)}
               className={`w-2.5 h-2.5 rounded-full transition-all ${
                 i === currentIndex ? 'bg-violet-600 scale-125' :
-                answers[qId] ? 'bg-emerald-400' :
+                answers[q.id] !== undefined ? 'bg-emerald-400' :
                 'bg-slate-200'
               }`}
             />

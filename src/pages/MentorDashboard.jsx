@@ -1,145 +1,525 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { toISTTime, toISTDate, toISTDateTime, nowIST } from '../utils/time';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
-  Users, Calendar, BarChart2, Settings, LogOut, Bell,
-  Star, CheckCircle2, Plus, Loader2, AlertCircle, Clock,
-  ClipboardList, UserCheck, MessageSquare, Inbox, StopCircle,
+  Calendar, BarChart2, LogOut, Bell, Star, CheckCircle2,
+  Plus, Loader2, AlertCircle, Clock, ClipboardList, UserCheck,
+  MessageSquare, Inbox, StopCircle, X, Wifi, WifiOff, Info,
+  Check, Users, Send
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
-import { getCurrentUser, getUserDisplayName, clearUserSession } from '../utils/jwt';
+import { getUserDisplayName, clearUserSession, setUserFullName } from '../utils/jwt';
 import { mentorshipApi } from '../services/api/mentorshipApi';
-
 
 const DAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
 
-const TABS = [
-  { id: 'overview',     label: 'Overview',         icon: BarChart2 },
-  { id: 'sessions',     label: 'Sessions',          icon: Clock },
-  { id: 'requests',     label: 'Requests',          icon: Inbox },
-  { id: 'profile',      label: 'My Profile',        icon: UserCheck },
-  { id: 'availability', label: 'Availability',      icon: Calendar },
-  { id: 'feedback',     label: 'Session Feedback',  icon: ClipboardList },
-];
+// ── SHARED UI ─────────────────────────────────────────────────────────────────
 
-function NavItem({ icon: Icon, label, active, onClick }) {
+function NavItem({ icon: Icon, label, active, onClick, badge }) {
   return (
-    <button onClick={onClick} className={`flex items-center w-full px-4 py-3 rounded-xl transition-all font-semibold text-left ${active ? 'bg-emerald-50 text-emerald-600' : 'text-slate-500 hover:bg-slate-50 hover:text-slate-800'}`}>
-      <Icon size={20} className="mr-3 shrink-0" /> {label}
+    <button
+      onClick={onClick}
+      className={`flex items-center w-full px-4 py-3 rounded-xl transition-all font-semibold text-left ${
+        active ? 'bg-emerald-50 text-emerald-600 shadow-sm' : 'text-slate-500 hover:bg-slate-50 hover:text-slate-800'
+      }`}
+    >
+      <Icon size={20} className="mr-3 shrink-0" />
+      <span className="truncate flex-1">{label}</span>
+      {badge > 0 && (
+        <span className="ml-2 min-w-[20px] h-5 px-1.5 bg-red-500 text-white text-[10px] font-black rounded-full flex items-center justify-center">
+          {badge > 99 ? '99+' : badge}
+        </span>
+      )}
+      {active && !badge && <motion.div layoutId="activeTab" className="ml-auto w-1.5 h-1.5 rounded-full bg-emerald-500" />}
     </button>
   );
 }
 
 function Toast({ message, type, onClose }) {
-  useEffect(() => { const t = setTimeout(onClose, 3500); return () => clearTimeout(t); }, [onClose]);
+  useEffect(() => { const t = setTimeout(onClose, 4000); return () => clearTimeout(t); }, [onClose]);
   return (
     <motion.div
-      initial={{ opacity: 0, y: 20, scale: 0.95 }}
-      animate={{ opacity: 1, y: 0, scale: 1 }}
-      exit={{ opacity: 0, y: 20 }}
-      className={`fixed bottom-6 right-6 z-50 flex items-center gap-3 px-5 py-4 rounded-2xl shadow-xl font-semibold text-sm ${
-        type === 'success' ? 'bg-emerald-600 text-white' : 'bg-red-500 text-white'
+      initial={{ opacity: 0, y: 20, scale: 0.95, x: '-50%' }}
+      animate={{ opacity: 1, y: 0, scale: 1, x: '-50%' }}
+      exit={{ opacity: 0, y: 20, scale: 0.95, x: '-50%' }}
+      className={`fixed bottom-8 left-1/2 z-[100] flex items-center gap-3 px-6 py-4 rounded-2xl shadow-2xl font-bold text-sm min-w-[300px] border ${
+        type === 'success' ? 'bg-emerald-600 text-white border-emerald-500' : 'bg-red-600 text-white border-red-500'
       }`}
     >
-      {type === 'success' ? <CheckCircle2 size={18} /> : <AlertCircle size={18} />}
-      {message}
+      {type === 'success' ? <CheckCircle2 size={20} /> : <AlertCircle size={20} />}
+      <p className="flex-1">{message}</p>
+      <button onClick={onClose} className="opacity-70 hover:opacity-100"><X size={18} /></button>
     </motion.div>
   );
 }
 
-// ── OVERVIEW TAB ─────────────────────────────────────────────────────────────
-function OverviewTab({ profileData, slots }) {
-  return (
-    <div className="space-y-6">
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
-        <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}
-          className="md:col-span-2 bg-gradient-to-br from-emerald-600 to-teal-400 rounded-3xl p-8 text-white relative overflow-hidden shadow-lg shadow-emerald-500/20"
+// ── CHAT INTERFACE ────────────────────────────────────────────────────────────
+
+function ChatInterface({ session, onClose, onSessionEnded }) {
+  const name     = getUserDisplayName();
+  const token    = localStorage.getItem('token');
+  const BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:8000';
+  const wsUrl    = `${BASE_URL}/api/v1/mentorship/sessions/${session.session_id}/chat/?token=${token}`;
+
+  const [wsState,  setWsState]  = useState('connecting');
+  const [errorMsg, setErrorMsg] = useState('');
+  const [messages, setMessages] = useState([]);
+  const [input,    setInput]    = useState('');
+  const wsRef     = useRef(null);
+  const scrollRef = useRef(null);
+
+  useEffect(() => { scrollRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages]);
+
+  useEffect(() => {
+    const ws = new WebSocket(wsUrl);
+    wsRef.current = ws;
+    ws.addEventListener('open', () => setWsState('open'));
+    ws.onmessage = (e) => {
+      try {
+        const data = JSON.parse(e.data);
+        if (data.event === 'ERROR') {
+          setWsState(data.message?.toLowerCase().includes('locked') ? 'locked' : 'error');
+          setErrorMsg(data.message);
+          return;
+        }
+        if (data.event === 'NEW_MESSAGE') {
+          setMessages(prev => [...prev, { sender: data.sender, text: data.message, timestamp: data.timestamp, isMe: data.sender === name }]);
+        }
+        if (data.event === 'SESSION_ENDED') {
+          setMessages(prev => [...prev, { system: true, text: '✅ Session concluded. Please submit your feedback.' }]);
+          setWsState('ended');
+          setTimeout(() => onSessionEnded?.(session.session_id), 2500);
+        }
+      } catch { /* non-JSON */ }
+    };
+    ws.onclose = () => setWsState(p => p === 'connecting' ? 'error' : p === 'open' ? 'closed' : p);
+    ws.onerror = () => { setWsState('error'); setErrorMsg('Could not connect. Please try again.'); };
+    return () => ws.close();
+  }, [wsUrl]); // eslint-disable-line
+
+  const sendMessage = (e) => {
+    e?.preventDefault();
+    if (!input.trim() || wsRef.current?.readyState !== WebSocket.OPEN) return;
+    wsRef.current.send(JSON.stringify({ message: input.trim() }));
+    setInput('');
+  };
+
+  if (wsState === 'connecting') return (
+    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+      className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-900/50 backdrop-blur-md"
+    >
+      <motion.div initial={{ scale: 0.9, y: 20 }} animate={{ scale: 1, y: 0 }}
+        className="bg-white rounded-[32px] p-12 flex flex-col items-center gap-6 shadow-2xl max-w-sm w-full mx-4"
+      >
+        <div className="w-20 h-20 rounded-full bg-emerald-50 flex items-center justify-center">
+          <Loader2 size={36} className="animate-spin text-emerald-500" />
+        </div>
+        <div className="text-center">
+          <p className="font-black text-slate-800 text-lg">Joining Session</p>
+          <p className="text-slate-400 text-sm mt-1">Connecting with <span className="font-bold text-slate-600">{session.other_party_name}</span>...</p>
+        </div>
+        <button onClick={onClose} className="text-xs font-bold text-slate-400 hover:text-slate-600">Cancel</button>
+      </motion.div>
+    </motion.div>
+  );
+
+  if (wsState === 'locked' || wsState === 'error') {
+    const isLocked = wsState === 'locked';
+    return (
+      <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+        className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-900/50 backdrop-blur-md"
+      >
+        <motion.div initial={{ scale: 0.9, y: 20 }} animate={{ scale: 1, y: 0 }}
+          className="bg-white rounded-[32px] p-10 flex flex-col items-center gap-6 shadow-2xl max-w-sm w-full mx-4 text-center"
         >
-          <div className="absolute top-0 right-0 w-56 h-56 bg-white/10 rounded-full blur-3xl -translate-y-1/2 translate-x-1/2" />
-          <div className="relative z-10">
-            <span className="px-3 py-1 bg-white/20 backdrop-blur-md rounded-full text-xs font-bold uppercase tracking-wider mb-5 inline-block border border-white/30">
-              {profileData ? (profileData.is_verified ? '✅ Verified Mentor' : '⏳ Awaiting Verification') : '👤 Profile Setup Needed'}
-            </span>
-            <h2 className="text-2xl font-extrabold mb-2">
-              {profileData ? 'Your mentor profile is live' : 'Set up your mentor profile'}
-            </h2>
-            <p className="text-emerald-100 font-medium max-w-lg">
-              {profileData
-                ? profileData.is_verified
-                  ? 'You are a verified mentor. Set your availability so students can book sessions.'
-                  : 'Your profile is under review. You can set your availability once verified.'
-                : 'Create your mentor profile to start guiding students on their career journeys.'}
+          <div className={`w-20 h-20 rounded-full flex items-center justify-center ${isLocked ? 'bg-amber-50' : 'bg-red-50'}`}>
+            {isLocked ? <Clock size={36} className="text-amber-500" /> : <WifiOff size={36} className="text-red-400" />}
+          </div>
+          <div>
+            <p className="font-black text-slate-800 text-lg mb-2">{isLocked ? 'Room Not Open Yet' : 'Connection Failed'}</p>
+            <p className="text-slate-500 text-sm leading-relaxed">
+              {errorMsg || (isLocked ? 'This room opens 2 minutes before the session.' : 'Check your connection and try again.')}
             </p>
           </div>
+          <button onClick={onClose} className="w-full py-3 bg-slate-900 text-white font-black rounded-xl hover:bg-slate-800 transition-all">Close</button>
         </motion.div>
+      </motion.div>
+    );
+  }
 
-        <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.1 }}
-          className="bg-white rounded-3xl p-6 border border-slate-100 shadow-sm space-y-4"
-        >
-          <div className="flex items-center gap-4 bg-yellow-50 p-4 rounded-2xl border border-yellow-100">
-            <div className="w-11 h-11 bg-yellow-400 text-white rounded-full flex items-center justify-center shadow-md">
-              <Star size={18} />
+  const isInputDisabled = wsState === 'ended' || wsState === 'closed';
+  const statusConfig = ({
+    open:   { icon: <Wifi size={12} />,         label: 'Live',         cls: 'bg-emerald-500/20 text-emerald-300' },
+    ended:  { icon: <CheckCircle2 size={12} />, label: 'Ended',        cls: 'bg-slate-500/20 text-slate-300' },
+    closed: { icon: <WifiOff size={12} />,      label: 'Disconnected', cls: 'bg-red-500/20 text-red-300' },
+  })[wsState] ?? { icon: <Loader2 size={12} className="animate-spin" />, label: 'Connecting', cls: 'bg-yellow-500/20 text-yellow-300' };
+
+  return (
+    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+      className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-md"
+    >
+      <motion.div initial={{ scale: 0.95, y: 20 }} animate={{ scale: 1, y: 0 }} exit={{ scale: 0.95, y: 20 }}
+        className="bg-white w-full max-w-2xl rounded-[32px] shadow-2xl flex flex-col overflow-hidden"
+        style={{ height: '620px' }}
+      >
+        <div className="px-6 py-5 bg-gradient-to-r from-slate-900 to-emerald-900 flex items-center justify-between shrink-0">
+          <div className="flex items-center gap-4">
+            <div className="w-12 h-12 rounded-2xl bg-emerald-500 flex items-center justify-center text-white font-black text-lg shadow-lg">
+              {session.other_party_name?.[0]?.toUpperCase()}
             </div>
             <div>
-              <p className="text-xs font-bold text-yellow-600 uppercase tracking-wider">Rating</p>
-              <p className="text-2xl font-extrabold text-slate-800">—</p>
+              <p className="font-black text-white text-base">{session.other_party_name}</p>
+              <p className="text-xs text-slate-400">{toISTDateTime(session.scheduled_at)}</p>
             </div>
           </div>
-          <div className="flex items-center gap-4 bg-emerald-50 p-4 rounded-2xl border border-emerald-100">
-            <div className="w-11 h-11 bg-emerald-500 text-white rounded-full flex items-center justify-center shadow-md">
-              <Calendar size={18} />
+          <div className="flex items-center gap-3">
+            <div className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-black ${statusConfig.cls}`}>
+              {statusConfig.icon} {statusConfig.label.toUpperCase()}
+            </div>
+            <button onClick={onClose} className="w-9 h-9 rounded-full bg-white/10 hover:bg-white/20 flex items-center justify-center text-white">
+              <X size={16} />
+            </button>
+          </div>
+        </div>
+
+        <div className="flex-1 overflow-y-auto p-6 space-y-4 bg-slate-50/60">
+          {messages.length === 0 && (
+            <div className="h-full flex flex-col items-center justify-center text-slate-400 gap-3">
+              <MessageSquare size={40} className="opacity-20" />
+              <p className="font-bold text-sm">Session is live — say hello!</p>
+            </div>
+          )}
+          {messages.map((msg, i) => msg.system ? (
+            <div key={i} className="flex justify-center">
+              <span className="text-xs font-bold px-4 py-2 bg-slate-200 text-slate-500 rounded-full">{msg.text}</span>
+            </div>
+          ) : (
+            <motion.div key={i} initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}
+              className={`flex ${msg.isMe ? 'justify-end' : 'justify-start'}`}
+            >
+              <div className={`max-w-[75%] px-5 py-3.5 rounded-2xl text-sm font-medium shadow-sm ${
+                msg.isMe ? 'bg-slate-900 text-white rounded-br-sm' : 'bg-white text-slate-800 border border-slate-100 rounded-bl-sm'
+              }`}>
+                {!msg.isMe && <p className="text-[10px] font-black text-emerald-600 mb-1 uppercase tracking-widest">{msg.sender}</p>}
+                <p className="leading-relaxed">{msg.text}</p>
+                {msg.timestamp && (
+                  <p className="text-[10px] mt-1.5 text-slate-400">
+                    {toISTTime(msg.timestamp)}
+                  </p>
+                )}
+              </div>
+            </motion.div>
+          ))}
+          <div ref={scrollRef} />
+        </div>
+
+        <div className="px-5 py-4 bg-white border-t border-slate-100 shrink-0">
+          {isInputDisabled ? (
+            <p className="text-center text-sm font-bold text-slate-400 py-2">
+              {wsState === 'ended' ? 'Session has ended. Thank you!' : 'Connection lost. Please refresh.'}
+            </p>
+          ) : (
+            <form onSubmit={sendMessage} className="flex items-center gap-3">
+              <input value={input} onChange={e => setInput(e.target.value)}
+                onKeyDown={e => e.key === 'Enter' && !e.shiftKey && (e.preventDefault(), sendMessage())}
+                placeholder="Type a message..."
+                className="flex-1 bg-slate-100 rounded-2xl px-5 py-3.5 text-sm font-medium text-slate-800 placeholder:text-slate-400 outline-none focus:ring-2 focus:ring-emerald-500"
+              />
+              <button type="submit" disabled={!input.trim()}
+                className="w-12 h-12 bg-emerald-600 text-white rounded-2xl flex items-center justify-center hover:bg-emerald-700 disabled:opacity-40 shadow-lg active:scale-95 shrink-0"
+              >
+                <Send size={18} />
+              </button>
+            </form>
+          )}
+        </div>
+      </motion.div>
+    </motion.div>
+  );
+}
+
+// ── OVERVIEW TAB ──────────────────────────────────────────────────────────────
+
+function OverviewTab({ profileData, slots, pendingCount, onTabChange }) {
+  const name = getUserDisplayName();
+
+  const stats = [
+    { label: 'Active Slots',      value: slots.length,  icon: Calendar, color: 'emerald' },
+    { label: 'Pending Requests',  value: pendingCount,  icon: Inbox,    color: 'amber'   },
+    { label: 'Rating',            value: '—',           icon: Star,     color: 'yellow'  },
+  ];
+
+  return (
+    <div className="space-y-8">
+      {/* Hero */}
+      <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}
+        className="bg-gradient-to-br from-slate-900 via-slate-800 to-emerald-900 rounded-[2.5rem] p-10 text-white relative overflow-hidden shadow-2xl"
+      >
+        <div className="absolute top-0 right-0 w-96 h-96 bg-emerald-500/10 rounded-full blur-[100px] -translate-y-1/2 translate-x-1/2" />
+        <div className="relative z-10">
+          <span className="px-4 py-1.5 bg-white/10 backdrop-blur-xl rounded-full text-xs font-black uppercase tracking-widest mb-4 inline-block border border-white/20">
+            {profileData?.is_verified ? '⚡ Verified Expert' : profileData ? '⏳ Verification Pending' : '⚠️ Action Required'}
+          </span>
+          <h2 className="text-4xl font-black mb-2 leading-tight">
+            Welcome back, {name} 👋
+          </h2>
+          <p className="text-slate-300 font-medium max-w-xl text-base leading-relaxed mb-6">
+            {profileData?.is_verified
+              ? 'Your profile is live. Students can discover and book sessions with you.'
+              : profileData
+              ? 'Your application is under review. You will be notified once approved.'
+              : 'Complete your profile to start mentoring students.'}
+          </p>
+
+          {/* Quick profile details */}
+          {profileData && (
+            <div className="flex flex-wrap gap-4">
+              {profileData.expertise && (
+                <div className="px-4 py-2 bg-white/10 rounded-xl text-sm font-bold border border-white/10">
+                  🎯 {profileData.expertise.split(',')[0].trim()}
+                </div>
+              )}
+              {profileData.years_experience > 0 && (
+                <div className="px-4 py-2 bg-white/10 rounded-xl text-sm font-bold border border-white/10">
+                  🏆 {profileData.years_experience} yrs experience
+                </div>
+              )}
+              {profileData.bio && (
+                <div className="px-4 py-2 bg-white/10 rounded-xl text-sm font-bold border border-white/10 max-w-xs truncate">
+                  💬 {profileData.bio.substring(0, 40)}{profileData.bio.length > 40 ? '...' : ''}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      </motion.div>
+
+      {/* Stats row */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
+        {stats.map(({ label, value, icon: Icon, color }, i) => (
+          <motion.div
+            key={label}
+            initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.08 }}
+            whileHover={{ y: -4 }}
+            onClick={() => label === 'Pending Requests' && onTabChange('requests')}
+            className={`bg-white rounded-[2rem] p-7 border border-slate-100 shadow-lg flex items-center gap-5 ${
+              label === 'Pending Requests' ? 'cursor-pointer hover:border-amber-200' : ''
+            }`}
+          >
+            <div className={`w-14 h-14 rounded-2xl flex items-center justify-center shadow-inner relative ${
+              color === 'emerald' ? 'bg-emerald-100 text-emerald-600' :
+              color === 'amber'   ? 'bg-amber-100 text-amber-600' :
+                                    'bg-yellow-100 text-yellow-600'
+            }`}>
+              <Icon size={26} fill={color === 'yellow' ? 'currentColor' : 'none'} />
+              {label === 'Pending Requests' && value > 0 && (
+                <span className="absolute -top-1.5 -right-1.5 min-w-[20px] h-5 px-1.5 bg-red-500 text-white text-[10px] font-black rounded-full flex items-center justify-center">
+                  {value}
+                </span>
+              )}
             </div>
             <div>
-              <p className="text-xs font-bold text-emerald-600 uppercase tracking-wider">Availability Slots</p>
-              <p className="text-2xl font-extrabold text-slate-800">{slots.length}</p>
+              <p className="text-xs font-black text-slate-400 uppercase tracking-widest">{label}</p>
+              <p className="text-3xl font-black text-slate-800">{value}</p>
             </div>
-          </div>
-        </motion.div>
+          </motion.div>
+        ))}
       </div>
-
-      {/* Mentor List */}
-      <VerifiedMentorsList />
     </div>
   );
 }
 
-function VerifiedMentorsList() {
-  const [mentors, setMentors] = useState([]);
-  const [loading, setLoading] = useState(true);
+// ── SESSIONS TAB ──────────────────────────────────────────────────────────────
+
+function useCountdown(secondsInit) {
+  const [secs, setSecs] = useState(secondsInit);
+  useEffect(() => { setSecs(secondsInit); }, [secondsInit]);
+  useEffect(() => {
+    if (secs <= -3600) return;
+    const t = setInterval(() => setSecs(p => p - 1), 1000);
+    return () => clearInterval(t);
+  }, [secs]);
+  if (secs <= 0) return { display: 'Live Now', isLive: true };
+  const h = Math.floor(secs / 3600), m = Math.floor((secs % 3600) / 60), s = secs % 60;
+  return { display: `${h}h ${String(m).padStart(2,'0')}m ${String(s).padStart(2,'0')}s`, isLive: secs <= 300 };
+}
+
+function SessionCard({ session, onEnd, endingId, onJoin }) {
+  const { display, isLive } = useCountdown(session.seconds_until_start);
+  const liveStatus    = session.is_live || isLive;
+  const hasAutoOpened = useRef(false);
 
   useEffect(() => {
-    listMentors().then(setMentors).catch(console.error).finally(() => setLoading(false));
-  }, []);
-
-  if (loading) return (
-    <div className="flex items-center gap-3 text-slate-500 py-4">
-      <Loader2 size={18} className="animate-spin text-emerald-500" /><span className="font-medium">Loading mentor network...</span>
-    </div>
-  );
+    if (liveStatus && !hasAutoOpened.current) { hasAutoOpened.current = true; onJoin(session); }
+  }, [liveStatus, session, onJoin]);
 
   return (
-    <div className="bg-white rounded-3xl border border-slate-100 shadow-sm p-6">
-      <h3 className="text-lg font-extrabold text-slate-800 mb-5 flex items-center gap-2">
-        <Users size={18} className="text-emerald-500" /> Verified Mentor Network
-      </h3>
-      {mentors.length === 0 ? (
-        <div className="text-center py-8 text-slate-400">
-          <Users size={40} className="mx-auto mb-3 opacity-30" />
-          <p className="font-semibold">No verified mentors yet.</p>
-          <p className="text-sm font-medium mt-1">Once admin approves profiles, they'll appear here.</p>
+    <motion.div layout className={`group flex items-center gap-6 p-6 rounded-[2rem] border transition-all ${
+      liveStatus ? 'bg-emerald-50 border-emerald-200 ring-4 ring-emerald-500/5' : 'bg-white border-slate-100 hover:border-slate-200'
+    }`}>
+      <div className={`w-16 h-16 rounded-2xl flex items-center justify-center shrink-0 group-hover:scale-110 transition-transform ${
+        liveStatus ? 'bg-emerald-500 text-white shadow-lg shadow-emerald-200' : 'bg-slate-100 text-slate-400'
+      }`}>
+        <Users size={28} />
+      </div>
+      <div className="flex-1 min-w-0">
+        <div className="flex items-center gap-2 mb-1">
+          <p className="font-black text-slate-800 text-lg truncate">{session.other_party_name}</p>
+          {liveStatus && <span className="flex h-2 w-2 rounded-full bg-emerald-500 animate-pulse" />}
+        </div>
+        <div className="flex items-center gap-3 text-sm font-bold text-slate-500">
+          <span className="flex items-center gap-1.5"><Clock size={14} />{toISTTime(session.scheduled_at)}</span>
+          <span className="w-1 h-1 rounded-full bg-slate-300" />
+          <span>{toISTDate(session.scheduled_at)}</span>
+        </div>
+      </div>
+      <div className="flex items-center gap-3 shrink-0">
+        {liveStatus ? (
+          <>
+            <button onClick={() => onJoin(session)}
+              className="px-5 py-2.5 bg-emerald-600 text-white text-xs font-black rounded-xl hover:bg-emerald-700 flex items-center gap-2 shadow-lg shadow-emerald-200 active:scale-95"
+            >
+              <MessageSquare size={14} /> JOIN CHAT
+            </button>
+            <button onClick={() => onEnd(session.session_id)} disabled={endingId === session.session_id}
+              className="px-5 py-2.5 bg-red-500 text-white text-xs font-black rounded-xl hover:bg-red-600 flex items-center gap-2 shadow-lg shadow-red-200 disabled:opacity-50 active:scale-95"
+            >
+              {endingId === session.session_id ? <Loader2 size={14} className="animate-spin" /> : <StopCircle size={14} />} END
+            </button>
+          </>
+        ) : (
+          <div className="px-4 py-2 bg-slate-100 rounded-xl text-slate-600 text-xs font-black tabular-nums">{display}</div>
+        )}
+      </div>
+    </motion.div>
+  );
+}
+
+function SessionsTab({ toast }) {
+  const [sessions,   setSessions]   = useState([]);
+  const [loading,    setLoading]    = useState(true);
+  const [endingId,   setEndingId]   = useState(null);
+  const [activeChat, setActiveChat] = useState(null);
+
+  const fetchSessions = useCallback(async () => {
+    try { setSessions((await mentorshipApi.getUpcomingSessions()) || []); }
+    catch (err) { console.error(err); }
+    finally { setLoading(false); }
+  }, []);
+
+  useEffect(() => { fetchSessions(); }, [fetchSessions]);
+
+  const handleJoin        = useCallback((session) => setActiveChat(session), []);
+  const handleSessionEnded = useCallback((sessionId) => {
+    setSessions(prev => prev.filter(s => s.session_id !== sessionId));
+    setActiveChat(null);
+    toast('Session ended. Please submit your feedback.', 'success');
+  }, [toast]);
+
+  const handleEnd = async (id) => {
+    setEndingId(id);
+    try { await mentorshipApi.endSession(id); }
+    catch (err) { toast(err.message || 'Error ending session', 'error'); }
+    finally { setEndingId(null); }
+  };
+
+  return (
+    <>
+      <div className="max-w-4xl">
+        <div className="mb-8">
+          <h3 className="text-2xl font-black text-slate-800">Your Sessions</h3>
+          <p className="text-slate-500 font-bold">Manage your live and upcoming mentorship calls</p>
+        </div>
+        {loading ? (
+          <div className="flex flex-col items-center justify-center py-20 bg-white rounded-[2.5rem] border border-dashed border-slate-200">
+            <Loader2 size={40} className="animate-spin text-emerald-500 mb-4" />
+            <p className="text-slate-400 font-bold">Synchronizing session data...</p>
+          </div>
+        ) : sessions.length === 0 ? (
+          <div className="bg-white rounded-[2.5rem] p-16 text-center border border-slate-100 shadow-sm">
+            <div className="w-20 h-20 bg-slate-50 rounded-full flex items-center justify-center mx-auto mb-6 text-slate-200"><Clock size={40} /></div>
+            <h4 className="text-xl font-black text-slate-800 mb-2">No Scheduled Sessions</h4>
+            <p className="text-slate-500 font-medium max-w-xs mx-auto">When students book a slot with you, they will appear here.</p>
+          </div>
+        ) : (
+          <div className="space-y-4">
+            <AnimatePresence mode="popLayout">
+              {sessions.map(s => <SessionCard key={s.session_id} session={s} onEnd={handleEnd} endingId={endingId} onJoin={handleJoin} />)}
+            </AnimatePresence>
+          </div>
+        )}
+      </div>
+      <AnimatePresence>
+        {activeChat && <ChatInterface session={activeChat} onClose={() => setActiveChat(null)} onSessionEnded={handleSessionEnded} />}
+      </AnimatePresence>
+    </>
+  );
+}
+
+// ── REQUESTS TAB ──────────────────────────────────────────────────────────────
+
+function RequestsTab({ toast, onCountChange }) {
+  const [requests, setRequests] = useState([]);
+  const [loading,  setLoading]  = useState(true);
+  const [actionId, setActionId] = useState(null);
+
+  const fetchRequests = useCallback(async () => {
+    try {
+      const data = (await mentorshipApi.getPendingRequests()) || [];
+      setRequests(data);
+      onCountChange?.(data.length);
+    } catch (err) { console.error(err); }
+    finally { setLoading(false); }
+  }, [onCountChange]);
+
+  useEffect(() => { fetchRequests(); }, [fetchRequests]);
+
+  const handleApprove = async (id) => {
+    setActionId(id);
+    try {
+      await mentorshipApi.approveRequest(id);
+      toast('Request approved! Session created.', 'success');
+      fetchRequests();
+    } catch (err) { toast(err.message || 'Failed to approve', 'error'); }
+    finally { setActionId(null); }
+  };
+
+  return (
+    <div className="max-w-4xl">
+      <div className="mb-8">
+        <h3 className="text-2xl font-black text-slate-800">Pending Requests</h3>
+        <p className="text-slate-500 font-bold">Students waiting for your confirmation</p>
+      </div>
+      {loading ? (
+        <div className="flex justify-center py-12"><Loader2 className="animate-spin text-emerald-500" /></div>
+      ) : requests.length === 0 ? (
+        <div className="bg-white rounded-[2.5rem] p-12 text-center border border-slate-100">
+          <Inbox size={48} className="mx-auto text-slate-200 mb-4" />
+          <p className="text-slate-400 font-bold">Your inbox is clear.</p>
         </div>
       ) : (
-        <div className="space-y-3">
-          {mentors.map((m, i) => (
-            <div key={i} className="flex items-center gap-4 p-4 rounded-2xl border border-slate-100 hover:border-emerald-100 hover:bg-emerald-50/30 transition-colors">
-              <div className="w-10 h-10 rounded-full bg-gradient-to-br from-emerald-400 to-teal-500 text-white font-extrabold text-sm flex items-center justify-center shrink-0">
-                {m.full_name?.[0] || 'M'}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          {requests.map(r => (
+            <motion.div layout key={r.request_id} className="bg-white p-6 rounded-[2rem] border border-slate-100 shadow-sm flex flex-col justify-between">
+              <div className="flex items-start gap-4 mb-6">
+                <div className="w-12 h-12 rounded-2xl bg-amber-100 text-amber-600 flex items-center justify-center font-black text-lg shrink-0">
+                  {r.student_name?.[0] || 'S'}
+                </div>
+                <div>
+                  <p className="font-black text-slate-800">{r.student_name}</p>
+                  <p className="text-xs font-bold text-slate-400 uppercase tracking-tighter mb-2">{r.time_slot}</p>
+                  <div className="bg-slate-50 p-3 rounded-xl text-xs font-medium text-slate-600 border border-slate-100 italic">
+                    "{r.message || 'No message provided'}"
+                  </div>
+                </div>
               </div>
-              <div className="flex-1 min-w-0">
-                <p className="font-bold text-slate-800 text-sm">{m.full_name || m.email || 'Mentor'}</p>
-                <p className="text-xs text-slate-400 font-medium truncate">{m.expertise || 'Expertise not listed'}</p>
-              </div>
-              <span className="px-2.5 py-1 bg-emerald-50 text-emerald-700 border border-emerald-200 text-xs font-bold rounded-full">Verified</span>
-            </div>
+              <button onClick={() => handleApprove(r.request_id)} disabled={actionId === r.request_id}
+                className="w-full py-3 bg-emerald-600 text-white font-black rounded-xl hover:bg-emerald-700 flex items-center justify-center gap-2 disabled:opacity-50"
+              >
+                {actionId === r.request_id ? <Loader2 size={16} className="animate-spin" /> : <Check size={16} />}
+                APPROVE REQUEST
+              </button>
+            </motion.div>
           ))}
         </div>
       )}
@@ -147,427 +527,228 @@ function VerifiedMentorsList() {
   );
 }
 
-// ── SESSIONS TAB ─────────────────────────────────────────────────────────────
-function useCountdown(secondsInit) {
-  const [secs, setSecs] = useState(secondsInit);
-  useEffect(() => {
-    if (secs <= 0) return;
-    const t = setInterval(() => setSecs(s => s - 1), 1000);
-    return () => clearInterval(t);
-  }, []);
-  const h = Math.floor(Math.abs(secs) / 3600);
-  const m = Math.floor((Math.abs(secs) % 3600) / 60);
-  const s = Math.abs(secs) % 60;
-  const pad = n => String(n).padStart(2, '0');
-  return secs <= 0 ? 'Live Now' : `${h}h ${pad(m)}m ${pad(s)}s`;
-}
+// ── PROFILE TAB ───────────────────────────────────────────────────────────────
 
-function SessionCard({ session, onEnd, endingId }) {
-  const countdown = useCountdown(session.seconds_until_start);
-  const isLive = session.is_live || session.seconds_until_start <= 0;
-  const BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:8000';
-  const token = localStorage.getItem('token');
-  const wsUrl = `${BASE_URL.replace(/^http/, 'ws')}/api/v1/mentorship/sessions/${session.session_id}/chat/?token=${token}`;
-
-  return (
-    <div className={`flex items-center gap-4 p-5 rounded-2xl border transition-colors ${isLive ? 'bg-emerald-50 border-emerald-200' : 'bg-white border-slate-100'}`}>
-      <div className={`w-12 h-12 rounded-xl flex items-center justify-center shrink-0 ${isLive ? 'bg-emerald-500 text-white' : 'bg-slate-100 text-slate-500'}`}>
-        <MessageSquare size={20} />
-      </div>
-      <div className="flex-1 min-w-0">
-        <p className="font-bold text-slate-800">{session.other_party_name}</p>
-        <p className="text-xs text-slate-500 font-medium mt-0.5">
-          {new Date(session.scheduled_at).toLocaleString()}
-        </p>
-      </div>
-      <div className="text-right shrink-0">
-        {isLive ? (
-          <div className="flex items-center gap-2">
-            <a
-              href={wsUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="px-3 py-1.5 bg-emerald-600 text-white text-xs font-bold rounded-lg hover:bg-emerald-700 transition-all"
-            >
-              Join Chat
-            </a>
-            <button
-              onClick={() => onEnd(session.session_id)}
-              disabled={endingId === session.session_id}
-              className="px-3 py-1.5 bg-red-500 text-white text-xs font-bold rounded-lg hover:bg-red-600 transition-all disabled:opacity-50 flex items-center gap-1"
-            >
-              {endingId === session.session_id ? <Loader2 size={12} className="animate-spin" /> : <StopCircle size={12} />} End
-            </button>
-          </div>
-        ) : (
-          <span className="text-sm font-extrabold text-emerald-600 tabular-nums">{countdown}</span>
-        )}
-      </div>
-    </div>
-  );
-}
-
-function SessionsTab({ toast }) {
-  const [sessions, setSessions] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [endingId, setEndingId] = useState(null);
+function ProfileTab({ profileData, onProfileCreated, toast }) {
+  const [form, setForm] = useState({
+    expertise: profileData?.expertise || '', bio: profileData?.bio || '', years_experience: profileData?.years_experience || 0,
+  });
+  const [loading, setLoading] = useState(false);
 
   useEffect(() => {
-    getUpcomingSessions().then(setSessions).catch(console.error).finally(() => setLoading(false));
-  }, []);
+    if (profileData) setForm({ expertise: profileData.expertise || '', bio: profileData.bio || '', years_experience: profileData.years_experience || 0 });
+  }, [profileData]);
 
-  async function handleEnd(sessionId) {
-    setEndingId(sessionId);
+  const handleSubmit = async (e) => {
+    e.preventDefault(); setLoading(true);
     try {
-      await endSession(sessionId);
-      setSessions(prev => prev.filter(s => s.session_id !== sessionId));
-      toast('Session ended. Student redirected to feedback.', 'success');
-    } catch (err) {
-      toast(err.message || 'Failed to end session', 'error');
-    } finally {
-      setEndingId(null);
-    }
-  }
+      await mentorshipApi.upsertMentorProfile(form);
+      const fresh = await mentorshipApi.getMentorProfile();
+      if (fresh?.full_name) setUserFullName(fresh.full_name);
+      onProfileCreated(fresh);
+      toast('Profile updated and saved!', 'success');
+    } catch (err) { toast(err.message || 'Failed to save', 'error'); }
+    finally { setLoading(false); }
+  };
 
-  return (
-    <div className="max-w-2xl space-y-4">
-      <div className="bg-white rounded-3xl border border-slate-100 shadow-sm p-6">
-        <h3 className="text-lg font-extrabold text-slate-800 mb-5 flex items-center gap-2">
-          <Clock size={18} className="text-emerald-500" /> Upcoming & Live Sessions
-        </h3>
-        {loading ? (
-          <div className="flex items-center gap-3 text-slate-400 py-6"><Loader2 size={18} className="animate-spin" /><span className="font-medium">Loading sessions...</span></div>
-        ) : sessions.length === 0 ? (
-          <div className="text-center py-10 text-slate-400">
-            <Clock size={40} className="mx-auto mb-3 opacity-30" />
-            <p className="font-semibold">No upcoming sessions.</p>
-            <p className="text-sm font-medium mt-1">Approve student requests to create sessions.</p>
-          </div>
-        ) : (
-          <div className="space-y-3">
-            {sessions.map(s => <SessionCard key={s.session_id} session={s} onEnd={handleEnd} endingId={endingId} />)}
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
-
-// ── REQUESTS TAB ──────────────────────────────────────────────────────────────
-function RequestsTab({ toast }) {
-  const [requests, setRequests] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [approvingId, setApprovingId] = useState(null);
-
-  useEffect(() => {
-    getPendingRequests().then(setRequests).catch(console.error).finally(() => setLoading(false));
-  }, []);
-
-  async function handleApprove(requestId) {
-    setApprovingId(requestId);
-    try {
-      await approveRequest(requestId);
-      setRequests(prev => prev.filter(r => r.request_id !== requestId));
-      toast('Request approved! Session created.', 'success');
-    } catch (err) {
-      toast(err.message || 'Failed to approve request', 'error');
-    } finally {
-      setApprovingId(null);
-    }
-  }
+  const fieldCls = "w-full px-6 py-4 bg-slate-50 border-2 border-transparent rounded-2xl outline-none focus:border-emerald-500 focus:bg-white transition-all font-bold text-slate-800";
 
   return (
     <div className="max-w-2xl">
-      <div className="bg-white rounded-3xl border border-slate-100 shadow-sm p-6">
-        <h3 className="text-lg font-extrabold text-slate-800 mb-5 flex items-center gap-2">
-          <Inbox size={18} className="text-emerald-500" /> Pending Student Requests
-        </h3>
-        {loading ? (
-          <div className="flex items-center gap-3 text-slate-400 py-6"><Loader2 size={18} className="animate-spin" /><span className="font-medium">Loading requests...</span></div>
-        ) : requests.length === 0 ? (
-          <div className="text-center py-10 text-slate-400">
-            <Inbox size={40} className="mx-auto mb-3 opacity-30" />
-            <p className="font-semibold">No pending requests.</p>
-            <p className="text-sm font-medium mt-1">Students who book your slots will appear here.</p>
-          </div>
-        ) : (
-          <div className="space-y-3">
-            {requests.map(r => (
-              <div key={r.request_id} className="flex items-center gap-4 p-4 bg-amber-50 rounded-2xl border border-amber-100">
-                <div className="w-10 h-10 rounded-full bg-amber-400 text-white font-extrabold text-sm flex items-center justify-center shrink-0">
-                  {r.student_name?.[0] || 'S'}
-                </div>
-                <div className="flex-1 min-w-0">
-                  <p className="font-bold text-slate-800 text-sm">{r.student_name}</p>
-                  <p className="text-xs text-slate-500 font-medium">{r.time_slot}</p>
-                </div>
-                <button
-                  onClick={() => handleApprove(r.request_id)}
-                  disabled={approvingId === r.request_id}
-                  className="flex items-center gap-1.5 px-4 py-2 bg-emerald-600 text-white font-bold text-sm rounded-xl hover:bg-emerald-700 transition-all disabled:opacity-50 shrink-0"
-                >
-                  {approvingId === r.request_id ? <Loader2 size={14} className="animate-spin" /> : <CheckCircle2 size={14} />} Approve
-                </button>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
-
-// ── PROFILE TAB ───────────────────────────────────────────────────────────────
-function ProfileTab({ profileData, onProfileCreated, toast }) {
-  const [expertise, setExpertise] = useState(profileData?.expertise || '');
-  const [bio, setBio] = useState(profileData?.bio || '');
-  const [yearsExperience, setYearsExperience] = useState(profileData?.years_experience || 0);
-  const [loading, setLoading] = useState(true); // Set to true to indicate loading initially
-
-  useEffect(() => {
-    const fetchProfile = async () => {
-      try {
-        const data = await getMentorProfile(); // Fetch the profile
-        if (data) {
-          setExpertise(data.expertise || '');
-          setBio(data.bio || '');
-          setYearsExperience(data.years_experience || 0);
-          onProfileCreated(data); // Update parent state with fetched data
-        }
-      } catch (err) {
-        console.error("Error fetching mentor profile:", err);
-        // If there's an error fetching, it likely means no profile exists, so we don't pre-fill.
-      } finally {
-        setLoading(false);
-      }
-    };
-    fetchProfile();
-  }, [onProfileCreated]); // Dependency on onProfileCreated
-
-  async function handleSave(e) {
-    e.preventDefault();
-    setLoading(true);
-    try {
-      const res = await upsertMentorProfile({ expertise, bio, years_experience: yearsExperience });
-      // Ensure local storage and parent state are updated with the latest info
-      onProfileCreated({ ...profileData, expertise, bio, years_experience: yearsExperience, is_verified: profileData?.is_verified || false, mentor_id: res.mentor_id || profileData?.mentor_id });
-      toast('Profile saved successfully!', 'success');
-    } catch (err) {
-      toast(err.message || 'Failed to save profile', 'error');
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  return (
-    <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}
-      className="bg-white rounded-3xl border border-slate-100 shadow-sm p-8 max-w-xl"
-    >
-      <h3 className="text-xl font-extrabold text-slate-900 mb-2">
-        {profileData ? 'Manage Mentor Profile' : 'Create Mentor Profile'}
-      </h3>
-      <p className="text-slate-500 font-medium mb-6">
-        {profileData ? 'Update your expertise, bio, and experience.' : 'Tell students what you specialize in. Be specific — students search by skills.'}
-      </p>
-      {loading ? ( // Conditionally render loader
-        <div className="flex items-center justify-center py-10 gap-3 text-slate-500">
-          <Loader2 size={24} className="animate-spin text-emerald-500" />
-          <span className="font-semibold text-lg">Loading profile...</span>
+      <motion.div initial={{ opacity: 0, x: -20 }} animate={{ opacity: 1, x: 0 }}
+        className="bg-white rounded-[2.5rem] p-10 border border-slate-100 shadow-xl"
+      >
+        <div className="mb-8">
+          <h3 className="text-2xl font-black text-slate-800">Mentor Profile</h3>
+          <p className="text-slate-500 font-bold">Visible to students looking for guidance</p>
         </div>
-      ) : (
-        <form onSubmit={handleSave} className="space-y-5">
-          <div>
-            <label className="block text-sm font-bold text-slate-800 mb-2">Your Areas of Expertise</label>
-            <textarea
-              value={expertise}
-              onChange={e => setExpertise(e.target.value)}
-              placeholder="e.g., Software Engineering, Python, Machine Learning, System Design, Interview Prep"
-              rows={4}
-              required
-              className="w-full px-4 py-3 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none transition-all font-medium text-slate-700 placeholder:text-slate-400 shadow-sm resize-none"
-            />
-            <p className="text-xs text-slate-400 font-medium mt-1.5">Separate skills with commas</p>
-          </div>
-          <div>
-            <label className="block text-sm font-bold text-slate-800 mb-2">Short Bio</label>
-            <textarea
-              value={bio}
-              onChange={e => setBio(e.target.value)}
-              placeholder="Tell students a bit about yourself and your mentoring style."
-              rows={3}
-              className="w-full px-4 py-3 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none transition-all font-medium text-slate-700 placeholder:text-slate-400 shadow-sm resize-none"
+        <form onSubmit={handleSubmit} className="space-y-6">
+          {[
+            { label: 'Core Expertise', key: 'expertise', type: 'text', placeholder: 'e.g. Full Stack Development, UI/UX Design' },
+            { label: 'Years of Experience', key: 'years_experience', type: 'number', placeholder: '5' },
+          ].map(({ label, key, type, placeholder }) => (
+            <div key={key} className="space-y-2">
+              <label className="text-sm font-black text-slate-700 uppercase tracking-widest ml-1">{label}</label>
+              <input type={type} required min={type === 'number' ? 0 : undefined} value={form[key]} placeholder={placeholder}
+                onChange={e => setForm({ ...form, [key]: type === 'number' ? parseInt(e.target.value) || 0 : e.target.value })}
+                className={fieldCls}
+              />
+            </div>
+          ))}
+          <div className="space-y-2">
+            <label className="text-sm font-black text-slate-700 uppercase tracking-widest ml-1">Professional Bio</label>
+            <textarea rows={4} required value={form.bio} placeholder="Briefly describe your career journey..."
+              onChange={e => setForm({ ...form, bio: e.target.value })} className={`${fieldCls} resize-none`}
             />
           </div>
-          <div>
-            <label className="block text-sm font-bold text-slate-800 mb-2">Years of Experience</label>
-            <input
-              type="number"
-              value={yearsExperience}
-              onChange={e => setYearsExperience(parseInt(e.target.value) || 0)}
-              placeholder="e.g., 5"
-              min="0"
-              required
-              className="w-full px-4 py-3 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none transition-all font-medium text-slate-700 placeholder:text-slate-400 shadow-sm"
-            />
-          </div>
-          <button
-            type="submit"
-            disabled={loading || !expertise.trim()}
-            className="w-full flex items-center justify-center gap-2 py-4 bg-gradient-to-r from-emerald-600 to-teal-500 text-white font-bold text-lg rounded-xl shadow-lg hover:-translate-y-0.5 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+          <button type="submit" disabled={loading}
+            className="w-full py-5 bg-slate-900 text-white font-black rounded-2xl hover:bg-slate-800 shadow-xl flex items-center justify-center gap-3 disabled:opacity-50"
           >
-            {loading ? <><Loader2 size={20} className="animate-spin" /> Saving...</> : <><UserCheck size={20} /> Save Changes</>}
+            {loading ? <Loader2 size={24} className="animate-spin" /> : <UserCheck size={24} />}
+            SAVE PROFILE SETTINGS
           </button>
         </form>
-      )}
-
-      {profileData && !profileData.is_verified && (
-          <div className="mt-5 flex items-start gap-3 bg-amber-50 border border-amber-200 rounded-2xl p-4">
+        {profileData && !profileData.is_verified && (
+          <div className="mt-6 p-5 bg-amber-50 border border-amber-200 rounded-2xl flex items-start gap-3">
             <AlertCircle size={18} className="text-amber-500 shrink-0 mt-0.5" />
-            <p className="text-sm font-semibold text-amber-700">
-              Your profile is under review. Once an admin verifies it, you'll be able to set availability and receive student bookings.
-            </p>
+            <p className="text-sm font-semibold text-amber-700">Your profile is under review. Once verified, you can set availability and receive bookings.</p>
           </div>
         )}
-    </motion.div>
+      </motion.div>
+    </div>
   );
 }
 
 // ── AVAILABILITY TAB ──────────────────────────────────────────────────────────
-function AvailabilityTab({ mentorId, profileData, toast }) {
-  const [slots, setSlots] = useState([]);
-  const [loadingSlots, setLoadingSlots] = useState(true);
-  const [adding, setAdding] = useState(false);
-  const [form, setForm] = useState({ day_of_week: 0, start_time: '09:00', end_time: '11:00' });
+
+function AvailabilityTab({ mentorId, profileData, toast, onUpdate }) {
+  const [slots,      setSlots]      = useState([]);
+  const [loading,    setLoading]    = useState(true);
+  const [adding,     setAdding]     = useState(false);
   const [submitting, setSubmitting] = useState(false);
 
-  useEffect(() => {
-    if (!mentorId) { setLoadingSlots(false); return; }
-    getMentorAvailability(mentorId)
-      .then(setSlots)
-      .catch(console.error)
-      .finally(() => setLoadingSlots(false));
+  const now           = nowIST();
+  const todayDowIndex = (now.getDay() + 6) % 7;
+  const currentHour   = now.getHours();
+
+  const [form, setForm] = useState({
+    day_of_week: todayDowIndex,
+    start_time:  `${String(Math.min(currentHour + 1, 22)).padStart(2, '00')}:00`,
+    end_time:    `${String(Math.min(currentHour + 2, 23)).padStart(2, '00')}:00`,
+  });
+
+  const fetchSlots = useCallback(async () => {
+    if (!mentorId) { setLoading(false); return; }
+    try { setSlots((await mentorshipApi.getMentorAvailability(mentorId)) || []); }
+    catch (err) { console.error(err); }
+    finally { setLoading(false); }
   }, [mentorId]);
 
-  async function handleAdd(e) {
+  useEffect(() => { fetchSlots(); }, [fetchSlots]);
+
+  const handleDayChange = (i) => {
+    const isToday = i === todayDowIndex;
+    const startH = isToday ? Math.min(currentHour + 1, 22) : 9;
+    setForm(f => ({ ...f, day_of_week: i, start_time: `${String(startH).padStart(2,'0')}:00`, end_time: `${String(Math.min(startH+1,23)).padStart(2,'0')}:00` }));
+  };
+
+  const handleAddSlot = async (e) => {
     e.preventDefault();
+    const [startH] = form.start_time.split(':').map(Number);
+    const [endH]   = form.end_time.split(':').map(Number);
+    if (form.day_of_week === todayDowIndex && startH <= currentHour) return toast('Start time must be in the future for today.', 'error');
+    if (endH <= startH) return toast('End time must be after start time.', 'error');
     setSubmitting(true);
     try {
-      // Backend expects day_of_week 1–7 (1=Mon), but form stores 0-indexed
-      const slot = { ...form, day_of_week: form.day_of_week + 1 };
-      const res = await setAvailability([slot]);
-      setSlots(prev => [...prev, { ...form, id: res?.id || Date.now() }]);
+      await mentorshipApi.setAvailability([{ ...form, day_of_week: form.day_of_week + 1 }]);
+      toast('Availability updated!', 'success');
       setAdding(false);
-      toast('Availability slot added!', 'success');
-    } catch (err) {
-      toast(err.message || 'Failed to set availability', 'error');
-    } finally {
-      setSubmitting(false);
-    }
-  }
+      await fetchSlots();
+      onUpdate?.();
+    } catch (err) { toast(err.message || 'Failed to set availability', 'error'); }
+    finally { setSubmitting(false); }
+  };
 
   const isVerified = profileData?.is_verified;
+  const selectCls  = "w-full px-4 py-3 bg-white border-2 border-slate-200 rounded-xl font-bold outline-none focus:border-emerald-500 transition-all";
 
   return (
-    <div className="space-y-6 max-w-2xl">
-      {!profileData && (
-        <div className="flex items-center gap-3 bg-amber-50 border border-amber-200 rounded-2xl px-5 py-4">
-          <AlertCircle size={18} className="text-amber-500 shrink-0" />
-          <p className="text-sm font-semibold text-amber-700">Create your mentor profile first before setting availability.</p>
-        </div>
-      )}
+    <div className="max-w-4xl space-y-6">
       {profileData && !isVerified && (
-        <div className="flex items-center gap-3 bg-amber-50 border border-amber-200 rounded-2xl px-5 py-4">
-          <Clock size={18} className="text-amber-500 shrink-0" />
-          <p className="text-sm font-semibold text-amber-700">Your profile is awaiting admin verification. Availability can be set once verified.</p>
+        <div className="p-6 bg-amber-50 border-2 border-amber-200 rounded-[2rem] flex items-start gap-4">
+          <div className="w-10 h-10 bg-amber-200 text-amber-700 rounded-full flex items-center justify-center shrink-0"><Info size={20} /></div>
+          <div>
+            <p className="font-black text-amber-900">Account Under Review</p>
+            <p className="text-sm font-bold text-amber-700">Students cannot book sessions until our team verifies your credentials.</p>
+          </div>
         </div>
       )}
-
-      {/* Current Slots */}
-      <div className="bg-white rounded-3xl border border-slate-100 shadow-sm p-6">
-        <div className="flex items-center justify-between mb-5">
-          <h3 className="text-lg font-extrabold text-slate-800 flex items-center gap-2">
-            <Calendar size={18} className="text-emerald-500" /> Weekly Availability
-          </h3>
+      {!profileData && (
+        <div className="p-6 bg-amber-50 border-2 border-amber-200 rounded-[2rem] flex items-start gap-4">
+          <AlertCircle size={20} className="text-amber-600 shrink-0 mt-0.5" />
+          <p className="text-sm font-bold text-amber-700">Create your mentor profile first before setting availability.</p>
+        </div>
+      )}
+      <div className="bg-white rounded-[2.5rem] p-10 border border-slate-100 shadow-xl">
+        <div className="flex items-center justify-between mb-8">
+          <div>
+            <h3 className="text-2xl font-black text-slate-800">Weekly Schedule</h3>
+            <p className="text-slate-500 font-bold">Define your repeating weekly availability</p>
+          </div>
           {isVerified && (
-            <button
-              onClick={() => setAdding(v => !v)}
-              className="flex items-center gap-2 px-4 py-2 bg-emerald-600 text-white font-bold text-sm rounded-xl hover:bg-emerald-700 transition-all shadow-sm"
+            <button onClick={() => setAdding(!adding)}
+              className="px-6 py-3 bg-emerald-600 text-white font-black rounded-xl hover:bg-emerald-700 flex items-center gap-2 shadow-lg shadow-emerald-100"
             >
-              <Plus size={16} /> Add Slot
+              {adding ? <X size={18} /> : <Plus size={18} />} {adding ? 'CANCEL' : 'ADD NEW SLOT'}
             </button>
           )}
         </div>
 
-        {/* Add Form */}
         <AnimatePresence>
           {adding && (
-            <motion.form
-              initial={{ opacity: 0, height: 0 }}
-              animate={{ opacity: 1, height: 'auto' }}
-              exit={{ opacity: 0, height: 0 }}
-              onSubmit={handleAdd}
-              className="bg-emerald-50 rounded-2xl border border-emerald-200 p-5 mb-5 space-y-4 overflow-hidden"
+            <motion.form initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} exit={{ opacity: 0, height: 0 }}
+              onSubmit={handleAddSlot} className="bg-slate-50 p-8 rounded-[2rem] border-2 border-slate-100 mb-8 space-y-6 overflow-hidden"
             >
-              <h4 className="font-extrabold text-slate-800 text-sm">New Availability Slot</h4>
-              <div className="grid grid-cols-3 gap-4">
-                <div>
-                  <label className="block text-xs font-bold text-slate-600 mb-1.5">Day</label>
-                  <select
-                    value={form.day_of_week}
-                    onChange={e => setForm(f => ({ ...f, day_of_week: parseInt(e.target.value) }))}
-                    className="w-full px-3 py-2.5 bg-white border border-slate-200 rounded-xl text-sm font-semibold text-slate-700 outline-none focus:ring-2 focus:ring-emerald-500"
-                  >
-                    {DAYS.map((d, i) => <option key={i} value={i}>{d}</option>)}
+              <p className="text-xs font-bold text-slate-500">
+                Today is <span className="font-black text-emerald-700">{DAYS[todayDowIndex]}</span>.
+                {form.day_of_week === todayDowIndex && <span className="ml-1 text-amber-600">Only future hours bookable today.</span>}
+              </p>
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                <div className="space-y-2">
+                  <label className="text-xs font-black text-slate-400 uppercase tracking-widest ml-1">Weekday</label>
+                  <select value={form.day_of_week} onChange={e => handleDayChange(parseInt(e.target.value))} className={selectCls}>
+                    {DAYS.map((d, i) => <option key={i} value={i}>{d}{i === todayDowIndex ? ' (Today)' : ''}</option>)}
                   </select>
                 </div>
-                <div>
-                  <label className="block text-xs font-bold text-slate-600 mb-1.5">Start Time</label>
-                  <input
-                    type="time" value={form.start_time}
-                    onChange={e => setForm(f => ({ ...f, start_time: e.target.value }))}
-                    className="w-full px-3 py-2.5 bg-white border border-slate-200 rounded-xl text-sm font-semibold text-slate-700 outline-none focus:ring-2 focus:ring-emerald-500"
+                <div className="space-y-2">
+                  <label className="text-xs font-black text-slate-400 uppercase tracking-widest ml-1">Start Time</label>
+                  <input type="time" value={form.start_time}
+                    min={form.day_of_week === todayDowIndex ? `${String(Math.min(currentHour+1,23)).padStart(2,'0')}:00` : '00:00'}
+                    onChange={e => { const [h] = e.target.value.split(':').map(Number); setForm(f => ({ ...f, start_time: e.target.value, end_time: `${String(Math.min(h+1,23)).padStart(2,'0')}:00` })); }}
+                    className={selectCls}
                   />
                 </div>
-                <div>
-                  <label className="block text-xs font-bold text-slate-600 mb-1.5">End Time</label>
-                  <input
-                    type="time" value={form.end_time}
-                    onChange={e => setForm(f => ({ ...f, end_time: e.target.value }))}
-                    className="w-full px-3 py-2.5 bg-white border border-slate-200 rounded-xl text-sm font-semibold text-slate-700 outline-none focus:ring-2 focus:ring-emerald-500"
+                <div className="space-y-2">
+                  <label className="text-xs font-black text-slate-400 uppercase tracking-widest ml-1">End Time</label>
+                  <input type="time" value={form.end_time}
+                    min={(() => { const [h] = form.start_time.split(':').map(Number); return `${String(Math.min(h+1,23)).padStart(2,'0')}:00`; })()}
+                    onChange={e => setForm(f => ({ ...f, end_time: e.target.value }))} className={selectCls}
                   />
                 </div>
               </div>
-              <div className="flex gap-3">
-                <button type="button" onClick={() => setAdding(false)} className="flex-1 py-2.5 bg-white border border-slate-200 text-slate-700 font-bold rounded-xl text-sm hover:bg-slate-50 transition-all">Cancel</button>
-                <button type="submit" disabled={submitting} className="flex-1 py-2.5 bg-emerald-600 text-white font-bold rounded-xl text-sm hover:bg-emerald-700 transition-all disabled:opacity-50 flex items-center justify-center gap-2">
-                  {submitting ? <Loader2 size={16} className="animate-spin" /> : <CheckCircle2 size={16} />} Save Slot
-                </button>
-              </div>
+              <button type="submit" disabled={submitting}
+                className="w-full py-4 bg-emerald-600 text-white font-black rounded-xl hover:bg-emerald-700 shadow-lg flex items-center justify-center gap-2 disabled:opacity-50"
+              >
+                {submitting ? <Loader2 size={18} className="animate-spin" /> : <CheckCircle2 size={18} />} CONFIRM AND SAVE SLOT
+              </button>
             </motion.form>
           )}
         </AnimatePresence>
 
-        {/* Slot List */}
-        {loadingSlots ? (
-          <div className="flex items-center gap-3 text-slate-400 py-6"><Loader2 size={18} className="animate-spin" /><span className="font-medium">Loading slots...</span></div>
+        {loading ? (
+          <div className="py-12 text-center"><Loader2 className="animate-spin text-emerald-500 mx-auto" /></div>
         ) : slots.length === 0 ? (
-          <div className="text-center py-10 text-slate-400">
-            <Calendar size={40} className="mx-auto mb-3 opacity-30" />
-            <p className="font-semibold">No availability slots set.</p>
-            {isVerified && <p className="text-sm font-medium mt-1">Click "Add Slot" to set when students can book you.</p>}
+          <div className="py-12 text-center bg-slate-50 rounded-[2rem] border-2 border-dashed border-slate-200">
+            <Calendar size={40} className="mx-auto text-slate-200 mb-4" />
+            <p className="text-slate-400 font-bold">No availability slots defined yet.</p>
           </div>
         ) : (
-          <div className="space-y-3">
-            {slots.map((slot, i) => (
-              <div key={slot.id || i} className="flex items-center gap-4 p-4 bg-emerald-50 rounded-2xl border border-emerald-100">
-                <div className="w-10 h-10 rounded-xl bg-emerald-500 text-white font-extrabold text-xs flex items-center justify-center shrink-0">
-                  {DAYS[slot.day_of_week]?.slice(0,3) || slot.day_of_week}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {slots.map((s, i) => (
+              <div key={s.id || i} className="group flex items-center gap-4 p-5 bg-white border border-slate-100 rounded-2xl hover:border-emerald-200 transition-all shadow-sm">
+                <div className="w-12 h-12 rounded-xl bg-emerald-50 text-emerald-600 flex items-center justify-center font-black text-xs shrink-0">
+                  {DAYS[(s.day_of_week - 1)]?.slice(0, 3).toUpperCase()}
                 </div>
                 <div className="flex-1">
-                  <p className="font-bold text-slate-800 text-sm">{DAYS[slot.day_of_week] || `Day ${slot.day_of_week}`}</p>
-                  <p className="text-xs text-slate-500 font-medium">{slot.start_time} — {slot.end_time}</p>
+                  <p className="font-black text-slate-800 leading-tight flex items-center gap-2">
+                    {DAYS[(s.day_of_week - 1)] || `Day ${s.day_of_week}`}
+                    {(s.day_of_week - 1) === todayDowIndex && (
+                      <span className="text-[10px] font-black text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-full">TODAY</span>
+                    )}
+                  </p>
+                  <p className="text-xs font-bold text-slate-400 tracking-tighter uppercase">{s.start_time} — {s.end_time}</p>
                 </div>
-                <span className="text-xs font-bold text-emerald-600 bg-white border border-emerald-200 px-3 py-1 rounded-full">Active</span>
+                <div className="px-3 py-1 bg-emerald-50 text-emerald-600 text-[10px] font-black rounded-full opacity-0 group-hover:opacity-100 transition-opacity">ACTIVE</div>
               </div>
             ))}
           </div>
@@ -578,224 +759,185 @@ function AvailabilityTab({ mentorId, profileData, toast }) {
 }
 
 // ── FEEDBACK TAB ──────────────────────────────────────────────────────────────
-function FeedbackTab({ toast }) {
-  const [form, setForm] = useState({ session_id: '', notes: '', action_items: '' });
-  const [submitting, setSubmitting] = useState(false);
 
-  async function handleSubmit(e) {
-    e.preventDefault();
-    setSubmitting(true);
-    try {
-      await submitMentorFeedback(form);
-      setForm({ session_id: '', notes: '', action_items: '' });
-      toast('Feedback submitted successfully!', 'success');
-    } catch (err) {
-      toast(err.message || 'Failed to submit feedback', 'error');
-    } finally {
-      setSubmitting(false);
-    }
-  }
-
-  const inputCls = "w-full px-4 py-3 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 outline-none transition-all font-medium text-slate-700 placeholder:text-slate-400 shadow-sm";
-
+function FeedbackTab() {
   return (
-    <div className="max-w-xl">
-      <div className="bg-white rounded-3xl border border-slate-100 shadow-sm p-8">
-        <div className="flex items-center gap-3 mb-6">
-          <div className="w-12 h-12 bg-emerald-100 rounded-2xl flex items-center justify-center">
-            <ClipboardList size={24} className="text-emerald-600" />
-          </div>
-          <div>
-            <h3 className="text-xl font-extrabold text-slate-900">Post-Session Feedback</h3>
-            <p className="text-sm text-slate-500 font-medium">Submit notes and action items after a session.</p>
-          </div>
-        </div>
-
-        <form onSubmit={handleSubmit} className="space-y-5">
-          <div>
-            <label className="block text-sm font-bold text-slate-800 mb-2">Session ID <span className="text-red-500">*</span></label>
-            <input
-              type="text"
-              value={form.session_id}
-              onChange={e => setForm(f => ({ ...f, session_id: e.target.value }))}
-              placeholder="Paste session UUID from booking confirmation"
-              required
-              className={inputCls}
-            />
-            <p className="text-xs text-slate-400 font-medium mt-1.5">You receive this when a student books a session with you</p>
-          </div>
-          <div>
-            <label className="block text-sm font-bold text-slate-800 mb-2">Session Notes</label>
-            <textarea
-              value={form.notes}
-              onChange={e => setForm(f => ({ ...f, notes: e.target.value }))}
-              placeholder="What was covered? Key discussions, student progress observations..."
-              rows={4}
-              className={`${inputCls} resize-none`}
-            />
-          </div>
-          <div>
-            <label className="block text-sm font-bold text-slate-800 mb-2">Action Items for Student</label>
-            <textarea
-              value={form.action_items}
-              onChange={e => setForm(f => ({ ...f, action_items: e.target.value }))}
-              placeholder="Specific tasks or goals for the student to complete before the next session..."
-              rows={3}
-              className={`${inputCls} resize-none`}
-            />
-            <p className="text-xs text-slate-400 font-medium mt-1.5">These items will influence the student's AI roadmap</p>
-          </div>
-
-          <button
-            type="submit"
-            disabled={submitting || !form.session_id.trim()}
-            className="w-full flex items-center justify-center gap-2 py-4 bg-gradient-to-r from-emerald-600 to-teal-500 text-white font-bold text-lg rounded-xl shadow-lg hover:-translate-y-0.5 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            {submitting ? <><Loader2 size={20} className="animate-spin" /> Submitting...</> : <><CheckCircle2 size={20} /> Submit Feedback</>}
-          </button>
-        </form>
+    <div className="max-w-4xl">
+      <div className="mb-8">
+        <h3 className="text-2xl font-black text-slate-800">Session Feedback</h3>
+        <p className="text-slate-500 font-bold">Provide insights on student progress and behaviour</p>
+      </div>
+      <div className="bg-white rounded-[2.5rem] p-16 text-center border border-slate-100 shadow-sm">
+        <ClipboardList size={48} className="mx-auto text-slate-200 mb-4" />
+        <h4 className="text-xl font-black text-slate-800 mb-2">No Feedback Pending</h4>
+        <p className="text-slate-500 font-medium">After a session ends, submit feedback here to help parents track progress.</p>
       </div>
     </div>
   );
 }
 
-// ── MAIN COMPONENT ────────────────────────────────────────────────────────────
+// ── MAIN DASHBOARD ────────────────────────────────────────────────────────────
+
+const TABS = [
+  { id: 'overview',     label: 'Overview',        icon: BarChart2 },
+  { id: 'sessions',     label: 'Sessions',         icon: Clock },
+  { id: 'requests',     label: 'Requests',         icon: Inbox },
+  { id: 'profile',      label: 'My Profile',       icon: UserCheck },
+  { id: 'availability', label: 'Availability',     icon: Calendar },
+  { id: 'feedback',     label: 'Session Feedback', icon: ClipboardList },
+];
+
 export default function MentorDashboard() {
-  const navigate = useNavigate();
-  
-  // 1. GATEKEEPER: Check role before doing ANYTHING
-  const user = getCurrentUser();
-  const name = getUserDisplayName();
-  const isMentor = localStorage.getItem('role') === 'mentor';
+  const navigate      = useNavigate();
+  const name          = getUserDisplayName();
+  const [activeTab,     setActiveTab]     = useState('overview');
+  const [profileData,   setProfileData]   = useState(null);
+  const [slots,         setSlots]         = useState([]);
+  const [loading,       setLoading]       = useState(true);
+  const [toast,         setToast]         = useState(null);
+  const [pendingCount,  setPendingCount]  = useState(0);
 
-  const [activeTab, setActiveTab] = useState('overview');
-  const [profileData, setProfileData] = useState(null);
-  const [slots, setSlots] = useState([]);
-  const [toast, setToast] = useState(null);
-  const [isAuthorized, setIsAuthorized] = useState(true);
+  const fetchCoreData = useCallback(async () => {
+    try {
+      const profile = await mentorshipApi.getMentorProfile();
+      if (profile) {
+        if (profile.full_name) setUserFullName(profile.full_name);
+        setProfileData(profile);
+        localStorage.setItem('harmony_mentor_profile', JSON.stringify(profile));
+        const mentorId = profile.id?.toString() || profile.mentor_id?.toString() || '';
+        if (mentorId) setSlots((await mentorshipApi.getMentorAvailability(mentorId)) || []);
+      }
+    } catch (err) { console.error('Dashboard bootstrap:', err); }
+    finally { setLoading(false); }
+  }, []);
 
-  const mentorId = localStorage.getItem('harmony_mentor_id') || '';
+  // Also fetch pending count on mount for the badge
+  const fetchPendingCount = useCallback(async () => {
+    try {
+      const data = await mentorshipApi.getPendingRequests();
+      setPendingCount((data || []).length);
+    } catch { /* not a mentor yet or no requests */ }
+  }, []);
 
   useEffect(() => {
-    // 2. REDIRECT: If not a mentor, stop them immediately
-    if (!isMentor) {
-      console.warn("Unauthorized access attempt to Mentor Dashboard");
-      setIsAuthorized(false);
-      // Redirect to their correct home after 2 seconds
-      const timer = setTimeout(() => {
-        navigate(localStorage.getItem('role') === 'parent' ? '/parent-dashboard' : '/dashboard');
-      }, 2000);
-      return () => clearTimeout(timer);
-    }
+    const role = localStorage.getItem('role');
+    if (role !== 'mentor') { navigate(role === 'parent' ? '/parent-dashboard' : '/dashboard'); return; }
+    fetchCoreData();
+    fetchPendingCount();
+  }, [navigate, fetchCoreData, fetchPendingCount]);
 
-    // 3. SECURE FETCH: Only fetch if authorized
-    if (mentorId && isMentor) {
-      mentorshipApi.getMentorAvailability(mentorId).then(setSlots).catch(() => {});
-      setProfileData(JSON.parse(localStorage.getItem('harmony_mentor_profile') || 'null'));
-    }
-  }, [mentorId, isMentor, navigate]);
+  const showToast = useCallback((msg, type) => setToast({ message: msg, type }), []);
 
-  // 4. UNAUTHORIZED UI: Show a friendly error instead of a white screen
-  if (!isAuthorized) {
-    return (
-      <div className="min-h-screen bg-slate-50 flex flex-col items-center justify-center p-6 text-center">
-        <div className="w-20 h-20 bg-red-100 text-red-600 rounded-full flex items-center justify-center mb-6">
-          <AlertCircle size={40} />
+  const handleProfileSaved = useCallback(async (freshProfile) => {
+    if (!freshProfile) return fetchCoreData();
+    if (freshProfile.full_name) setUserFullName(freshProfile.full_name);
+    setProfileData(freshProfile);
+    localStorage.setItem('harmony_mentor_profile', JSON.stringify(freshProfile));
+    const mentorId = freshProfile.id?.toString() || freshProfile.mentor_id?.toString() || '';
+    if (mentorId) setSlots((await mentorshipApi.getMentorAvailability(mentorId).catch(() => [])) || []);
+  }, [fetchCoreData]);
+
+  if (loading) return (
+    <div className="h-screen w-full flex flex-col items-center justify-center bg-slate-50">
+      <div className="relative">
+        <div className="w-20 h-20 border-4 border-emerald-100 border-t-emerald-500 rounded-full animate-spin" />
+        <div className="absolute inset-0 flex items-center justify-center">
+          <span className="text-xs font-black text-emerald-600">H</span>
         </div>
-        <h1 className="text-2xl font-extrabold text-slate-900 mb-2">Access Denied</h1>
-        <p className="text-slate-500 font-medium max-w-md">
-          You are currently logged in as a <b>{localStorage.getItem('role')}</b>. 
-          Only verified Mentors can access this area.
-        </p>
-        <p className="text-slate-400 text-sm mt-4 italic">Redirecting you to your dashboard...</p>
-        <button 
-          onClick={() => navigate('/')}
-          className="mt-8 px-8 py-3 bg-slate-900 text-white font-bold rounded-xl shadow-lg"
-        >
-          Go Home Now
-        </button>
       </div>
-    );
-  }
-
-  function showToast(message, type) {
-    setToast({ message, type });
-  }
-
-  function handleLogout() {
-    clearUserSession();
-    navigate('/');
-  }
-
-  function handleProfileCreated(data) {
-    setProfileData(data);
-    localStorage.setItem('harmony_mentor_profile', JSON.stringify(data));
-  }
+      <p className="mt-6 text-slate-400 font-black tracking-widest text-xs uppercase animate-pulse">Establishing Secure Session...</p>
+    </div>
+  );
 
   return (
-    <div className="min-h-screen bg-slate-50 flex font-sans text-slate-900">
-      {/* Sidebar */}
-      <aside className="w-64 bg-white border-r border-slate-200 hidden md:flex flex-col justify-between fixed h-screen z-20">
-        <div>
-          <div className="h-20 flex items-center px-8 border-b border-slate-100 mb-6">
-            <div className="w-8 h-8 bg-gradient-to-br from-emerald-500 to-teal-400 rounded-lg flex items-center justify-center shadow-md mr-3">
-              <span className="text-white text-sm">💼</span>
+    <div className="min-h-screen bg-slate-50 flex font-sans text-slate-900 selection:bg-emerald-100 selection:text-emerald-900">
+
+      <aside className="w-72 bg-white border-r border-slate-200 hidden lg:flex flex-col justify-between fixed h-screen z-50">
+        <div className="p-8">
+          <div className="flex items-center gap-3 mb-12">
+            <div className="w-10 h-10 bg-emerald-600 rounded-2xl flex items-center justify-center shadow-lg shadow-emerald-200">
+              <span className="text-white font-black text-lg">H</span>
             </div>
-            <span className="text-xl font-extrabold tracking-tight text-slate-800">Harmony Pro</span>
+            <span className="text-2xl font-black tracking-tighter text-slate-800">HARMONY<span className="text-emerald-600">.</span></span>
           </div>
-          <nav className="px-4 space-y-1">
+          <nav className="space-y-2">
             {TABS.map(tab => (
-              <NavItem key={tab.id} icon={tab.icon} label={tab.label} active={activeTab === tab.id} onClick={() => setActiveTab(tab.id)} />
+              <NavItem
+                key={tab.id} icon={tab.icon} label={tab.label}
+                active={activeTab === tab.id} onClick={() => setActiveTab(tab.id)}
+                badge={tab.id === 'requests' ? pendingCount : 0}
+              />
             ))}
-            <NavItem icon={Settings} label="Settings" />
           </nav>
         </div>
-        <div className="p-4 border-t border-slate-100">
-          <button onClick={handleLogout} className="flex items-center w-full px-4 py-3 text-slate-500 hover:text-red-500 hover:bg-red-50 rounded-xl transition-all font-semibold">
-            <LogOut size={20} className="mr-3" /> Sign Out
+        <div className="p-8 border-t border-slate-100">
+          <div className="bg-slate-50 p-4 rounded-2xl mb-6 flex items-center gap-3 border border-slate-100">
+            <div className="w-10 h-10 rounded-xl bg-emerald-500 text-white flex items-center justify-center font-black shadow-md">
+              {name[0]?.toUpperCase()}
+            </div>
+            <div className="min-w-0">
+              <p className="font-black text-slate-800 truncate text-sm">{name}</p>
+              <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">MENTOR NODE</p>
+            </div>
+          </div>
+          <button onClick={() => { clearUserSession(); navigate('/'); }}
+            className="flex items-center w-full px-4 py-3 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-xl transition-all font-black text-xs tracking-widest uppercase"
+          >
+            <LogOut size={18} className="mr-3" /> Sign Out
           </button>
         </div>
       </aside>
 
-      {/* Main */}
-      <main className="flex-1 md:ml-64 p-6 md:p-8">
-        {/* Header */}
-        <header className="flex justify-between items-center mb-8">
+      <main className="flex-1 lg:ml-72 p-6 lg:p-12">
+        <header className="flex flex-col md:flex-row md:items-center justify-between mb-12 gap-6">
           <div>
-            <h1 className="text-3xl font-extrabold text-slate-900 tracking-tight">Welcome, {name}! 👋</h1>
-            <p className="text-slate-500 font-medium mt-1">
-              {TABS.find(t => t.id === activeTab)?.label} — Mentor Dashboard
+            <h1 className="text-4xl font-black text-slate-900 tracking-tighter">Control Center</h1>
+            <p className="text-slate-400 font-bold mt-1 uppercase tracking-widest text-xs">
+              Live Operations / <span className="text-emerald-600">{TABS.find(t => t.id === activeTab)?.label}</span>
             </p>
           </div>
-          <div className="flex items-center gap-3">
-            <button className="relative p-2.5 bg-white border border-slate-200 rounded-full hover:bg-slate-50 shadow-sm">
-              <Bell size={20} className="text-slate-600" />
-              <span className="absolute top-2 right-2.5 w-2 h-2 bg-red-500 rounded-full border border-white" />
+          <div className="flex items-center gap-4">
+            <button className="p-3 bg-white border border-slate-200 rounded-2xl text-slate-400 hover:text-emerald-500 shadow-sm relative"
+              onClick={() => setActiveTab('requests')}
+            >
+              <Bell size={20} />
+              {pendingCount > 0 && (
+                <span className="absolute -top-1 -right-1 min-w-[18px] h-[18px] px-1 bg-red-500 text-white text-[9px] font-black rounded-full flex items-center justify-center">
+                  {pendingCount > 99 ? '99+' : pendingCount}
+                </span>
+              )}
             </button>
-            <div className="w-10 h-10 rounded-full bg-gradient-to-tr from-emerald-400 to-teal-500 border-2 border-white shadow-sm flex items-center justify-center text-white font-extrabold text-sm">
-              {name[0]?.toUpperCase()}
+            <div className="h-10 w-[1px] bg-slate-200 mx-2" />
+            <div className="flex flex-col items-end">
+              <p className="text-xs font-black text-slate-400 uppercase tracking-widest">System Status</p>
+              <div className="flex items-center gap-1.5">
+                <span className="w-2 h-2 rounded-full bg-emerald-500" />
+                <p className="text-xs font-black text-slate-800">CONNECTED</p>
+              </div>
             </div>
           </div>
         </header>
 
-        {/* Tab Content */}
         <AnimatePresence mode="wait">
-          <motion.div key={activeTab} initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} transition={{ duration: 0.2 }}>
-            {activeTab === 'overview'     && <OverviewTab profileData={profileData} slots={slots} />}
+          <motion.div key={activeTab} initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -10 }} transition={{ duration: 0.2, ease: 'circOut' }}>
+            {activeTab === 'overview'     && <OverviewTab profileData={profileData} slots={slots} pendingCount={pendingCount} onTabChange={setActiveTab} />}
             {activeTab === 'sessions'     && <SessionsTab toast={showToast} />}
-            {activeTab === 'requests'     && <RequestsTab toast={showToast} />}
-            {activeTab === 'profile'      && <ProfileTab profileData={profileData} onProfileCreated={handleProfileCreated} toast={showToast} />}
-            {activeTab === 'availability' && <AvailabilityTab mentorId={mentorId} profileData={profileData} toast={showToast} />}
-            {activeTab === 'feedback'     && <FeedbackTab toast={showToast} />}
+            {activeTab === 'requests'     && <RequestsTab toast={showToast} onCountChange={setPendingCount} />}
+            {activeTab === 'profile'      && <ProfileTab profileData={profileData} onProfileCreated={handleProfileSaved} toast={showToast} />}
+            {activeTab === 'availability' && (
+              <AvailabilityTab
+                mentorId={profileData?.id?.toString() || profileData?.mentor_id?.toString() || ''}
+                profileData={profileData} toast={showToast} onUpdate={fetchCoreData}
+              />
+            )}
+            {activeTab === 'feedback' && <FeedbackTab />}
           </motion.div>
         </AnimatePresence>
       </main>
 
-      {/* Toast */}
       <AnimatePresence>
         {toast && <Toast key={toast.message} message={toast.message} type={toast.type} onClose={() => setToast(null)} />}
       </AnimatePresence>
     </div>
   );
 }
-

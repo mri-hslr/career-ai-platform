@@ -1,5 +1,6 @@
 import React from 'react';
 import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
+import { Toaster } from 'react-hot-toast';
 
 // Page Imports
 import Home from './pages/Home';
@@ -13,20 +14,14 @@ import PersonalityTest from './pages/PersonalityTest';
 import AptitudeTest from './pages/AptitudeTest';
 import CareerRecommendations from './pages/CareerRecommendations';
 import Roadmap from './pages/Roadmap';
-import MentorProfilePublic from './pages/MentorProfilePublic';
 import Mentorship from './pages/Mentorship';
+import MentorProfilePublic from './pages/MentorProfilePublic';
+
 export default function App() {
   return (
     <Router>
-      {/* GLOBAL RESPONSIVE WRAPPER 
-        min-h-screen: Ensures the background covers the whole screen.
-        flex flex-col: Allows you to easily add a sticky header/footer later.
-      */}
       <div className="min-h-screen bg-gray-50 text-gray-900 flex flex-col font-sans">
-        
-        {/* If you build a <Navbar />, you would place it right here so it shows on every page */}
-
-        {/* MAIN CONTENT AREA */}
+        <Toaster position="top-right" />
         <main className="flex-grow w-full">
           <Routes>
             {/* Public Routes */}
@@ -45,11 +40,12 @@ export default function App() {
             <Route path="/aptitude-test" element={<AptitudeTest />} />
             <Route path="/career-recommendations" element={<CareerRecommendations />} />
             <Route path="/roadmap" element={<Roadmap />} />
+
+            {/* Mentorship */}
+            <Route path="/mentorship" element={<Mentorship />} />
+            <Route path="/mentorship/:mentorId" element={<MentorProfilePublic />} />
           </Routes>
         </main>
-
-        {/* If you build a <Footer />, you would place it right here */}
-
       </div>
     </Router>
   );
