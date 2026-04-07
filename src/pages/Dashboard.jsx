@@ -54,12 +54,12 @@ function useUserProgress() {
       (userData?.progress?.personality_done ?? false) &&
       (userData?.progress?.aptitude_done ?? false),
     personalityData: userData?.personality_data ?? null,
-    aptiData: userData?.apti_data ?? null,
+    // UPDATE: Drill down into .scores object from your JSON
+    aptiData: userData?.apti_data?.scores ?? null, 
   };
 
   return { progress, loading, refetch: fetchUserData };
 }
-
 function NavItem({ icon: Icon, label, active, onClick }) {
   return (
     <button
@@ -171,7 +171,12 @@ function normalizeAptiData(data) {
 }
 
 function AptitudeCompletedCard({ aptiData }) {
-  const { q, l, v, max } = normalizeAptiData(aptiData);
+  // Mapping keys based on your specific JSON response
+  const q = aptiData?.quantitative ?? 0;
+  const l = aptiData?.logical ?? 0;
+  const v = aptiData?.verbal ?? 0;
+  const max = aptiData?.max_score ?? 5; // Updated default to 5 based on your data
+
   return (
     <div className="flex-1 bg-white rounded-3xl border border-emerald-200 p-6 shadow-sm">
       <div className="flex items-center gap-3 mb-3">
@@ -188,6 +193,23 @@ function AptitudeCompletedCard({ aptiData }) {
         <ScoreBar label="Quantitative" value={q} max={max} color="bg-blue-400" />
         <ScoreBar label="Logical" value={l} max={max} color="bg-violet-400" />
         <ScoreBar label="Verbal" value={v} max={max} color="bg-emerald-400" />
+      </div>
+    </div>
+  );
+}
+function ActiveRoadmap() {
+  const navigate = useNavigate();
+  return (
+    <div className="relative z-10 flex items-center justify-between">
+      <div>
+        <h4 className="text-xl font-bold text-white mb-2">Roadmap is Active</h4>
+        <p className="text-white/70 text-sm">You are currently tracking this career path.</p>
+        <button
+          onClick={() => navigate('/roadmap')}
+          className="mt-4 px-6 py-2 bg-white text-emerald-600 font-bold rounded-xl text-sm"
+        >
+          View Roadmap
+        </button>
       </div>
     </div>
   );
@@ -684,6 +706,7 @@ export default function Dashboard() {
             <div className="w-8 h-8 bg-gradient-to-br from-blue-500 to-sky-400 rounded-lg flex items-center justify-center shadow-md mr-3 group-hover:shadow-blue-500/30 group-hover:scale-105 transition-all">
               <TrendingUp className="text-white w-4 h-4" strokeWidth={2.5} />
             </div>
+            <TrendingUp className="text-white w-4 h-4" strokeWidth={2.5} />
             <span className="text-xl font-extrabold tracking-tight text-slate-800">Harmony</span>
           </div>
           <nav className="px-4 space-y-1">
